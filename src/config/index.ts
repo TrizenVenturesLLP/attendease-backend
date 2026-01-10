@@ -29,7 +29,7 @@ const parseCorsOrigin = (): string | string[] | ((origin: string | undefined) =>
   
   // Allow all origins if explicitly set to '*'
   if (corsOrigin === '*') {
-    return (origin: string | undefined) => true;
+    return (_origin: string | undefined) => true;
   }
   
   // Support comma-separated origins
