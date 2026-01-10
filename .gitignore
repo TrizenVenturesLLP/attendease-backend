@@ -1,0 +1,29 @@
+# Node
+node_modules
+dist
+
+# Environment
+.env
+.env.local
+!.env.example
+
+# IDE
+.idea
+.vscode
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+logs
+*.log
+npm-debug.log*
+
+# Testing
+coverage
+
+# Build
+*.tsbuildinfo
