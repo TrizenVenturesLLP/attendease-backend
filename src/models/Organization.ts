@@ -25,6 +25,13 @@ export interface OrganizationSettings {
   fiscalYearStart: number; // Month number (1-12)
 }
 
+export interface MicrosoftAuthConfig {
+  tenantId?: string; // Azure AD Tenant ID
+  domain?: string; // Primary domain (e.g., "company.onmicrosoft.com")
+  allowMicrosoftAuth: boolean; // Enable/disable Microsoft login
+  allowLocalAuth: boolean; // Enable/disable password login
+}
+
 export interface IOrganization extends Document {
   name: string;
   subdomain?: string;
@@ -32,6 +39,7 @@ export interface IOrganization extends Document {
   subscriptionPlan: SubscriptionPlan;
   subscriptionExpiry?: Date;
   settings: OrganizationSettings;
+  microsoftAuth: MicrosoftAuthConfig;
   createdBy?: mongoose.Types.ObjectId;
   createdAt: Date;
   updatedAt: Date;
@@ -143,6 +151,26 @@ const OrganizationSchema = new Schema<IOrganization>(
       type: OrganizationSettingsSchema,
       required: true,
       default: () => ({}),
+    },
+    // Microsoft authentication configuration
+    microsoftAuth: {
+      tenantId: {
+        type: String,
+        trim: true,
+      },
+      domain: {
+        type: String,
+        trim: true,
+        lowercase: true,
+      },
+      allowMicrosoftAuth: {
+        type: Boolean,
+        default: false,
+      },
+      allowLocalAuth: {
+        type: Boolean,
+        default: true, // Default to local auth enabled for backward compatibility
+      },
     },
     createdBy: {
       type: Schema.Types.ObjectId,

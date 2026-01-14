@@ -1,6 +1,7 @@
 import jwt from 'jsonwebtoken';
 import config from '../config';
-import User, { IUser } from '../models/User';
+import User, { IUser, AuthProvider } from '../models/User';
+import microsoftAuthService from './microsoftAuthService';
 import { BadRequestError, UnauthorizedError, NotFoundError } from '../utils/AppError';
 import { JwtPayload } from '../utils/ApiResponse';
 
@@ -16,12 +17,13 @@ export interface LoginResult {
     role: string;
     department?: string;
     employeeId?: string;
+    authProvider?: string;
   };
 }
 
 class AuthService {
   /**
-   * Authenticate user and generate JWT token
+   * Authenticate user with email and password (local auth)
    */
   async login(email: string, password: string): Promise<LoginResult> {
     if (!email || !password) {
@@ -35,6 +37,11 @@ class AuthService {
       throw new UnauthorizedError('Invalid email or password');
     }
 
+    // Check if user uses Microsoft auth only
+    if (user.authProvider === AuthProvider.MICROSOFT && !user.password) {
+      throw new UnauthorizedError('This account uses Microsoft login. Please sign in with Microsoft.');
+    }
+
     // Verify password
     const isPasswordValid = await user.comparePassword(password);
 
@@ -46,20 +53,67 @@ class AuthService {
     const token = this.generateToken(user);
 
     // Return user data without password
-    return {
-      token,
-      user: {
-        id: user._id.toString(),
-        organizationId: user.organizationId?.toString(),
-        email: user.email,
-        firstName: user.firstName,
-        lastName: user.lastName,
-        fullName: user.fullName,
-        role: user.role,
-        department: user.department,
-        employeeId: user.employeeId,
-      },
-    };
+    return this.createLoginResult(token, user);
+  }
+
+  /**
+   * Authenticate user with Microsoft OAuth
+   */
+  async loginWithMicrosoft(code: string): Promise<LoginResult> {
+    if (!code) {
+      throw new BadRequestError('Authorization code is required');
+    }
+
+    // Exchange code for tokens
+    const tokens = await microsoftAuthService.exchangeCodeForTokens(code);
+
+    // Get user profile from Microsoft
+    const profile = await microsoftAuthService.getUserProfile(tokens.accessToken);
+    const email = (profile.mail || profile.userPrincipalName).toLowerCase();
+
+    // Find organization by tenant ID or email domain
+    let organization = await microsoftAuthService.findOrganizationByTenant(tokens.account.tenantId);
+    
+    if (!organization) {
+      // Try to find by email domain
+      organization = await microsoftAuthService.findOrganizationByDomain(email);
+    }
+
+    if (!organization) {
+      throw new UnauthorizedError(
+        'Your organization is not registered for Microsoft login. Please contact your administrator.'
+      );
+    }
+
+    // Validate tenant if organization has tenant configured
+    if (organization.microsoftAuth?.tenantId && 
+        !microsoftAuthService.validateTenant(tokens.account.tenantId, organization)) {
+      throw new UnauthorizedError(
+        'Your Microsoft account is not authorized for this organization.'
+      );
+    }
+
+    // Find or create user
+    const user = await microsoftAuthService.findOrCreateUser(
+      profile,
+      organization._id.toString()
+    );
+
+    if (!user.isActive) {
+      throw new UnauthorizedError('Your account has been deactivated. Please contact your administrator.');
+    }
+
+    // Generate JWT token
+    const token = this.generateToken(user);
+
+    return this.createLoginResult(token, user);
+  }
+
+  /**
+   * Get Microsoft authorization URL
+   */
+  async getMicrosoftAuthUrl(state?: string): Promise<string> {
+    return microsoftAuthService.getAuthorizationUrl(state);
   }
 
   /**
@@ -67,7 +121,7 @@ class AuthService {
    * Super Admin: Token without organizationId (can access all orgs)
    * Other roles: Token includes organizationId for tenant isolation
    */
-  private generateToken(user: IUser): string {
+  generateToken(user: IUser): string {
     const payload: JwtPayload = {
       userId: user._id.toString(),
       email: user.email,
@@ -82,6 +136,27 @@ class AuthService {
     return jwt.sign(payload, config.jwtSecret as string, {
       expiresIn: config.jwtExpiresIn as string,
     } as jwt.SignOptions);
+  }
+
+  /**
+   * Create standardized login result
+   */
+  private createLoginResult(token: string, user: IUser): LoginResult {
+    return {
+      token,
+      user: {
+        id: user._id.toString(),
+        organizationId: user.organizationId?.toString(),
+        email: user.email,
+        firstName: user.firstName,
+        lastName: user.lastName,
+        fullName: user.fullName,
+        role: user.role,
+        department: user.department,
+        employeeId: user.employeeId,
+        authProvider: user.authProvider,
+      },
+    };
   }
 
   /**
@@ -121,6 +196,11 @@ class AuthService {
       throw new NotFoundError('User not found');
     }
 
+    // Check if user can change password (only local auth users)
+    if (user.authProvider === AuthProvider.MICROSOFT && !user.password) {
+      throw new BadRequestError('Microsoft authenticated users cannot change password here. Please use Microsoft account settings.');
+    }
+
     // Verify old password
     const isPasswordValid = await user.comparePassword(oldPassword);
 
@@ -139,7 +219,7 @@ class AuthService {
   async getCurrentUser(userId: string): Promise<any> {
     const user = await User.findById(userId)
       .populate('supervisorId', 'firstName lastName email')
-      .populate('organizationId', 'name subscriptionPlan')
+      .populate('organizationId', 'name subscriptionPlan microsoftAuth')
       .lean();
 
     if (!user) {
@@ -158,3 +238,4 @@ class AuthService {
 }
 
 export default new AuthService();
+

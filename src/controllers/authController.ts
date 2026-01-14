@@ -6,7 +6,7 @@ import { BadRequestError } from '../utils/AppError';
 class AuthController {
   /**
    * @route   POST /api/auth/login
-   * @desc    Login user and return JWT token
+   * @desc    Login user and return JWT token (local auth)
    * @access  Public
    */
   async login(req: Request, res: Response, next: NextFunction): Promise<void> {
@@ -22,6 +22,59 @@ class AuthController {
       const response: ApiResponse<typeof result> = {
         success: true,
         message: 'Login successful',
+        data: result,
+        timestamp: new Date().toISOString(),
+      };
+
+      res.status(200).json(response);
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  /**
+   * @route   GET /api/auth/microsoft/url
+   * @desc    Get Microsoft OAuth authorization URL
+   * @access  Public
+   */
+  async getMicrosoftAuthUrl(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      // Optional state parameter for CSRF protection
+      const state = req.query.state as string | undefined;
+      
+      const authUrl = await authService.getMicrosoftAuthUrl(state);
+
+      const response: ApiResponse<{ authUrl: string }> = {
+        success: true,
+        message: 'Microsoft authorization URL generated',
+        data: { authUrl },
+        timestamp: new Date().toISOString(),
+      };
+
+      res.status(200).json(response);
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  /**
+   * @route   POST /api/auth/microsoft/callback
+   * @desc    Handle Microsoft OAuth callback and authenticate user
+   * @access  Public
+   */
+  async microsoftCallback(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const { code } = req.body;
+
+      if (!code) {
+        throw new BadRequestError('Authorization code is required');
+      }
+
+      const result = await authService.loginWithMicrosoft(code);
+
+      const response: ApiResponse<typeof result> = {
+        success: true,
+        message: 'Microsoft login successful',
         data: result,
         timestamp: new Date().toISOString(),
       };

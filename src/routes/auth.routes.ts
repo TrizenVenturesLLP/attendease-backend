@@ -6,10 +6,24 @@ const router = Router();
 
 /**
  * @route   POST /api/auth/login
- * @desc    Login user
+ * @desc    Login user (local auth with email/password)
  * @access  Public
  */
 router.post('/login', authController.login);
+
+/**
+ * @route   GET /api/auth/microsoft/url
+ * @desc    Get Microsoft OAuth authorization URL
+ * @access  Public
+ */
+router.get('/microsoft/url', authController.getMicrosoftAuthUrl);
+
+/**
+ * @route   POST /api/auth/microsoft/callback
+ * @desc    Handle Microsoft OAuth callback
+ * @access  Public
+ */
+router.post('/microsoft/callback', authController.microsoftCallback);
 
 /**
  * @route   GET /api/auth/me
@@ -33,3 +47,4 @@ router.post('/change-password', authenticate, authController.changePassword);
 router.post('/logout', authenticate, authController.logout);
 
 export default router;
+

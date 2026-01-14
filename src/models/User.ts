@@ -9,6 +9,11 @@ export enum UserRole {
   EMPLOYEE = 'employee',
 }
 
+export enum AuthProvider {
+  LOCAL = 'local',
+  MICROSOFT = 'microsoft',
+}
+
 export interface IUser extends Document {
   organizationId: mongoose.Types.ObjectId;
   email: string;
@@ -22,6 +27,9 @@ export interface IUser extends Document {
   employeeId?: string;
   isActive: boolean;
   createdBy?: mongoose.Types.ObjectId;
+  // Microsoft authentication fields
+  authProvider: AuthProvider;
+  microsoftId?: string;
   createdAt: Date;
   updatedAt: Date;
   fullName: string;
@@ -50,7 +58,13 @@ const UserSchema = new Schema<IUser>(
     },
     password: {
       type: String,
-      required: [true, 'Password is required'],
+      required: [
+        function (this: IUser) {
+          // Password only required for local authentication
+          return this.authProvider === AuthProvider.LOCAL;
+        },
+        'Password is required for local authentication',
+      ],
       minlength: [6, 'Password must be at least 6 characters'],
       select: false, // Don't include password in queries by default
     },
@@ -95,6 +109,18 @@ const UserSchema = new Schema<IUser>(
     createdBy: {
       type: Schema.Types.ObjectId,
       ref: 'User',
+    },
+    // Microsoft authentication fields
+    authProvider: {
+      type: String,
+      enum: Object.values(AuthProvider),
+      default: AuthProvider.LOCAL,
+      required: true,
+    },
+    microsoftId: {
+      type: String,
+      sparse: true,
+      index: true,
     },
   },
   {
@@ -151,6 +177,8 @@ UserSchema.index({ organizationId: 1, employeeId: 1 }, { unique: true, sparse: t
 UserSchema.index({ organizationId: 1, department: 1 });
 UserSchema.index({ organizationId: 1, supervisorId: 1 });
 UserSchema.index({ organizationId: 1, role: 1 });
+// Microsoft authentication indexes
+UserSchema.index({ organizationId: 1, microsoftId: 1 }, { unique: true, sparse: true });
 
 const User = mongoose.model<IUser>('User', UserSchema);
 

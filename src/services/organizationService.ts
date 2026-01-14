@@ -2,6 +2,7 @@ import Organization, {
   IOrganization,
   SubscriptionPlan,
   OrganizationSettings,
+  MicrosoftAuthConfig,
 } from '../models/Organization';
 import User from '../models/User';
 import {
@@ -17,6 +18,7 @@ export interface CreateOrganizationData {
   subscriptionPlan?: SubscriptionPlan;
   subscriptionExpiry?: Date;
   settings?: Partial<OrganizationSettings>;
+  microsoftAuth?: Partial<MicrosoftAuthConfig>;
   createdBy?: mongoose.Types.ObjectId;
 }
 
@@ -27,6 +29,7 @@ export interface UpdateOrganizationData {
   subscriptionPlan?: SubscriptionPlan;
   subscriptionExpiry?: Date;
   settings?: Partial<OrganizationSettings>;
+  microsoftAuth?: Partial<MicrosoftAuthConfig>;
 }
 
 export interface OrganizationStats {
@@ -90,6 +93,12 @@ class OrganizationService {
         },
         timezone: data.settings?.timezone || 'Asia/Kolkata',
         fiscalYearStart: data.settings?.fiscalYearStart || 1,
+      },
+      microsoftAuth: {
+        tenantId: data.microsoftAuth?.tenantId,
+        domain: data.microsoftAuth?.domain,
+        allowMicrosoftAuth: data.microsoftAuth?.allowMicrosoftAuth ?? false,
+        allowLocalAuth: data.microsoftAuth?.allowLocalAuth ?? true,
       },
       createdBy: data.createdBy,
       isActive: true,
@@ -199,6 +208,22 @@ class OrganizationService {
       if (data.settings.fiscalYearStart) {
         organization.settings.fiscalYearStart =
           data.settings.fiscalYearStart;
+      }
+    }
+
+    // Update Microsoft authentication settings if provided
+    if (data.microsoftAuth) {
+      if (data.microsoftAuth.tenantId !== undefined) {
+        organization.microsoftAuth.tenantId = data.microsoftAuth.tenantId;
+      }
+      if (data.microsoftAuth.domain !== undefined) {
+        organization.microsoftAuth.domain = data.microsoftAuth.domain;
+      }
+      if (data.microsoftAuth.allowMicrosoftAuth !== undefined) {
+        organization.microsoftAuth.allowMicrosoftAuth = data.microsoftAuth.allowMicrosoftAuth;
+      }
+      if (data.microsoftAuth.allowLocalAuth !== undefined) {
+        organization.microsoftAuth.allowLocalAuth = data.microsoftAuth.allowLocalAuth;
       }
     }
 
