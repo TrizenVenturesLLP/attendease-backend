@@ -17,7 +17,7 @@ router.get('/', departmentController.getAllDepartments.bind(departmentController
 // Get department by ID - accessible to all authenticated users
 router.get('/:id', departmentController.getDepartmentById.bind(departmentController));
 
-// Admin/Super Admin only - manage departments
+// Admin/Super Admin only - manage departments (HR can only view)
 router.post(
   '/',
   authorize('admin', 'super_admin'),
@@ -36,7 +36,7 @@ router.delete(
   departmentController.deleteDepartment.bind(departmentController)
 );
 
-// Member management - Admin/Super Admin only
+// Member management - Admin/Super Admin only (HR cannot manage)
 router.post(
   '/:id/members',
   authorize('admin', 'super_admin'),

@@ -72,8 +72,13 @@ class UserController {
         search: req.query.search as string | undefined,
       };
 
-      // Pass organizationId from tenant middleware
-      const users = await userService.getAllUsers(filters, req.organizationId);
+      // Pass organizationId, requester role, and requester ID for permission filtering
+      const users = await userService.getAllUsers(
+        filters, 
+        req.organizationId,
+        req.user.role as UserRole,
+        req.user.userId
+      );
 
       const response: ApiResponse<typeof users> = {
         success: true,
@@ -167,10 +172,15 @@ class UserController {
    */
   async updateUser(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
+      if (!req.user) {
+        throw new BadRequestError('User not authenticated');
+      }
+
       const { id } = req.params;
       const updates: UpdateUserData = req.body;
 
-      const user = await userService.updateUser(id, updates);
+      // Pass requester role for permission validation
+      const user = await userService.updateUser(id, updates, req.user.role as UserRole);
 
       const response: ApiResponse<typeof user> = {
         success: true,

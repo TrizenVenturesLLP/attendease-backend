@@ -46,11 +46,34 @@ class UserService {
    * Create a new user (Super Admin/Admin/HR only)
    */
   async createUser(userData: CreateUserData, createdByUserId: string): Promise<IUser> {
+    // Get the creator user to check permissions
+    const createdBy = await User.findById(createdByUserId);
+    if (!createdBy) {
+      throw new NotFoundError('Creator user not found');
+    }
+
+    // Enforce role-based user creation restrictions
+    if (createdBy.role === UserRole.HR) {
+      if (userData.role !== UserRole.EMPLOYEE) {
+        throw new ForbiddenError('HR can only create Employee users');
+      }
+    }
+
+    if (createdBy.role === UserRole.ADMIN) {
+      if (userData.role === UserRole.SUPER_ADMIN || userData.role === UserRole.ADMIN) {
+        throw new ForbiddenError('Admin cannot create Super Admin or other Admin users');
+      }
+    }
+
+    // SUPERVISORS and EMPLOYEES cannot create any users
+    if (createdBy.role === UserRole.SUPERVISOR || createdBy.role === UserRole.EMPLOYEE) {
+      throw new ForbiddenError('Insufficient permissions to create users');
+    }
+
     // Special handling for Super Admin
     if (userData.role === UserRole.SUPER_ADMIN) {
       // Only Super Admin can create another Super Admin
-      const createdBy = await User.findById(createdByUserId);
-      if (!createdBy || createdBy.role !== UserRole.SUPER_ADMIN) {
+      if (createdBy.role !== UserRole.SUPER_ADMIN) {
         throw new ForbiddenError('Only Super Admin can create other Super Admin users');
       }
 
@@ -135,13 +158,24 @@ class UserService {
   /**
    * Get all users with optional filters (role-based access)
    * organizationId is required for non-Super Admin users
+   * requesterRole and requesterId are used to enforce supervisor team-only access
    */
-  async getAllUsers(filters?: UserFilters, organizationId?: string): Promise<IUser[]> {
+  async getAllUsers(
+    filters?: UserFilters, 
+    organizationId?: string, 
+    requesterRole?: UserRole, 
+    requesterId?: string
+  ): Promise<IUser[]> {
     const query: any = {};
 
     // Add organization filter (required for non-Super Admin)
     if (organizationId) {
       query.organizationId = organizationId;
+    }
+
+    // SUPERVISORS can only see their own team
+    if (requesterRole === UserRole.SUPERVISOR && requesterId) {
+      query.supervisorId = requesterId;
     }
 
     // Apply filters
@@ -282,12 +316,20 @@ class UserService {
 
   /**
    * Update user information
+   * requesterRole is used to enforce HR can only update Employees
    */
-  async updateUser(userId: string, updates: UpdateUserData): Promise<IUser> {
+  async updateUser(userId: string, updates: UpdateUserData, requesterRole?: UserRole): Promise<IUser> {
     const user = await User.findById(userId);
 
     if (!user) {
       throw new NotFoundError('User not found');
+    }
+
+    // HR can only update EMPLOYEE roles
+    if (requesterRole === UserRole.HR) {
+      if (user.role !== UserRole.EMPLOYEE) {
+        throw new ForbiddenError('HR can only update Employee users');
+      }
     }
 
     // Check if employeeId is being changed and if it's already in use within organization

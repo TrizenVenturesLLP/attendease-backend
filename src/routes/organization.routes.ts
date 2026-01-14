@@ -6,12 +6,12 @@ import { UserRole } from '../models/User';
 
 const router = Router();
 
-// Routes for Admin/HR to manage their own organization settings
+// Routes for Admin to manage their own organization settings
 router.get(
   '/my/settings',
   authenticate,
   tenantContext,
-  authorize(UserRole.ADMIN, UserRole.HR, UserRole.SUPER_ADMIN),
+  authorize(UserRole.ADMIN, UserRole.SUPER_ADMIN),
   organizationController.getMyOrganizationSettings
 );
 
@@ -19,7 +19,7 @@ router.put(
   '/my/settings',
   authenticate,
   tenantContext,
-  authorize(UserRole.ADMIN, UserRole.HR, UserRole.SUPER_ADMIN),
+  authorize(UserRole.ADMIN, UserRole.SUPER_ADMIN),
   organizationController.updateMyOrganizationSettings
 );
 

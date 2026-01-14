@@ -15,53 +15,53 @@ router.use(tenantContext);
 // Allow Super Admin to override organization
 router.use(allowOrganizationOverride);
 
-// Salary Structure Management (Admin/HR only)
+// Salary Structure Management (Admin only)
 router.post(
   '/salary-structure',
-  authorize(UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.HR),
+  authorize(UserRole.SUPER_ADMIN, UserRole.ADMIN),
   payrollController.createSalaryStructure
 );
 
 router.put(
   '/salary-structure/:userId',
-  authorize(UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.HR),
+  authorize(UserRole.SUPER_ADMIN, UserRole.ADMIN),
   payrollController.updateSalaryStructure
 );
 
 router.get(
   '/salary-structure/:userId',
-  authorize(UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.HR),
+  authorize(UserRole.SUPER_ADMIN, UserRole.ADMIN),
   payrollController.getSalaryStructure
 );
 
 router.get(
   '/salary-structures',
-  authorize(UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.HR),
+  authorize(UserRole.SUPER_ADMIN, UserRole.ADMIN),
   payrollController.getAllSalaryStructures
 );
 
-// Payroll Run Management (Admin/HR only)
+// Payroll Run Management (Admin only)
 router.post(
   '/run',
-  authorize(UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.HR),
+  authorize(UserRole.SUPER_ADMIN, UserRole.ADMIN),
   payrollController.createPayrollRun
 );
 
 router.post(
   '/run/:id/process',
-  authorize(UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.HR),
+  authorize(UserRole.SUPER_ADMIN, UserRole.ADMIN),
   payrollController.processPayrollRun
 );
 
 router.get(
   '/run/:id',
-  authorize(UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.HR),
+  authorize(UserRole.SUPER_ADMIN, UserRole.ADMIN),
   payrollController.getPayrollRun
 );
 
 router.get(
   '/runs',
-  authorize(UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.HR),
+  authorize(UserRole.SUPER_ADMIN, UserRole.ADMIN),
   payrollController.getPayrollRuns
 );
 
@@ -71,10 +71,10 @@ router.get(
   payrollController.getMyPayslips
 );
 
-// Payroll Record (Admin/HR only)
+// Payroll Record (Admin only)
 router.get(
   '/records/:id',
-  authorize(UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.HR),
+  authorize(UserRole.SUPER_ADMIN, UserRole.ADMIN),
   payrollController.getPayrollRecord
 );
 

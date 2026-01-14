@@ -17,28 +17,28 @@ router.get('/upcoming', holidayController.getUpcomingHolidays.bind(holidayContro
 router.get('/check/:date', holidayController.checkHoliday.bind(holidayController));
 router.get('/:id', holidayController.getHolidayById.bind(holidayController));
 
-// Admin/Super Admin/HR - manage holidays
+// Admin/Super Admin only - manage holidays (HR can only view)
 router.post(
   '/',
-  authorize('admin', 'super_admin', 'hr'),
+  authorize('admin', 'super_admin'),
   holidayController.createHoliday.bind(holidayController)
 );
 
 router.post(
   '/bulk',
-  authorize('admin', 'super_admin', 'hr'),
+  authorize('admin', 'super_admin'),
   holidayController.bulkCreateHolidays.bind(holidayController)
 );
 
 router.put(
   '/:id',
-  authorize('admin', 'super_admin', 'hr'),
+  authorize('admin', 'super_admin'),
   holidayController.updateHoliday.bind(holidayController)
 );
 
 router.delete(
   '/:id',
-  authorize('admin', 'super_admin', 'hr'),
+  authorize('admin', 'super_admin'),
   holidayController.deleteHoliday.bind(holidayController)
 );
 

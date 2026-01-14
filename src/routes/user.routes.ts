@@ -16,11 +16,11 @@ router.use(tenantContext, allowOrganizationOverride);
 /**
  * @route   GET /api/users/stats
  * @desc    Get user statistics
- * @access  Private (Super Admin/Admin/HR)
+ * @access  Private (Super Admin/Admin only)
  */
 router.get(
   '/stats',
-  authorize(UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.HR),
+  authorize(UserRole.SUPER_ADMIN, UserRole.ADMIN),
   userController.getUserStats
 );
 
@@ -56,11 +56,11 @@ router.post(
 /**
  * @route   GET /api/users
  * @desc    Get all users with filters
- * @access  Private (Super Admin/Admin/HR/Supervisor)
+ * @access  Private (Super Admin/Admin/HR only - Supervisors use /team endpoint)
  */
 router.get(
   '/',
-  authorize(UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.HR, UserRole.SUPERVISOR),
+  authorize(UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.HR),
   userController.getAllUsers
 );
 
@@ -74,7 +74,7 @@ router.get('/:id', userController.getUserById);
 /**
  * @route   PATCH /api/users/:id
  * @desc    Update user
- * @access  Private (Super Admin/Admin/HR or self)
+ * @access  Private (Super Admin/Admin/HR - HR can only update employees, service validates)
  */
 router.patch(
   '/:id',
