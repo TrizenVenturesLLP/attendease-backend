@@ -17,7 +17,7 @@ interface Config {
   mongoUri: string;
   jwtSecret: string;
   jwtExpiresIn: string;
-  corsOrigin: string;
+  corsOrigin: string | string[];
   frontendUrl: string;
   microsoft: MicrosoftConfig;
 }
@@ -28,7 +28,9 @@ const config: Config = {
   mongoUri: process.env.MONGO_URI!,
   jwtSecret: process.env.JWT_SECRET || 'your-super-secret-jwt-key-change-in-production',
   jwtExpiresIn: process.env.JWT_EXPIRES_IN || '7d',
-  corsOrigin: process.env.CORS_ORIGIN || 'http://localhost:3000',
+  corsOrigin: process.env.CORS_ORIGIN 
+    ? process.env.CORS_ORIGIN.split(',').map(origin => origin.trim())
+    : ['http://localhost:3000'],
   frontendUrl: process.env.FRONTEND_URL || 'http://localhost:3000',
   microsoft: {
     clientId: process.env.MICROSOFT_CLIENT_ID || '',
