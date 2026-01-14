@@ -10,7 +10,7 @@ import Holiday from '../models/Holiday';
 
 dotenv.config();
 
-const MONGO_URI = process.env.MONGO_URI || 'mongodb://localhost:27017/attendease';
+const MONGO_URI = process.env.MONGO_URI!;
 
 /**
  * Migration script to transform existing single-tenant data to multi-tenant architecture

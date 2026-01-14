@@ -33,7 +33,12 @@ const UserSchema = new Schema<IUser>(
     organizationId: {
       type: Schema.Types.ObjectId,
       ref: 'Organization',
-      required: [true, 'Organization ID is required'],
+      required: [
+        function (this: IUser) {
+          return this.role !== UserRole.SUPER_ADMIN;
+        },
+        'Organization ID is required for non-Super Admin users',
+      ],
       index: true,
     },
     email: {
@@ -136,7 +141,12 @@ UserSchema.methods.comparePassword = async function (
 };
 
 // Index for faster queries
-UserSchema.index({ organizationId: 1, email: 1 }, { unique: true });
+// Super Admin has globally unique email (no org), others are unique per org
+UserSchema.index({ email: 1 }, { 
+  unique: true, 
+  partialFilterExpression: { role: UserRole.SUPER_ADMIN } 
+});
+UserSchema.index({ organizationId: 1, email: 1 }, { unique: true, sparse: true });
 UserSchema.index({ organizationId: 1, employeeId: 1 }, { unique: true, sparse: true });
 UserSchema.index({ organizationId: 1, department: 1 });
 UserSchema.index({ organizationId: 1, supervisorId: 1 });

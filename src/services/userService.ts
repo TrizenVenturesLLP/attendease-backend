@@ -15,7 +15,7 @@ import {
 import mongoose from 'mongoose';
 
 export interface CreateUserData {
-  organizationId: string; // Required for multi-tenant
+  organizationId?: string; // Optional for Super Admin (platform-level), required for others
   email: string;
   password: string;
   firstName: string;
@@ -46,6 +46,47 @@ class UserService {
    * Create a new user (Super Admin/Admin/HR only)
    */
   async createUser(userData: CreateUserData, createdByUserId: string): Promise<IUser> {
+    // Special handling for Super Admin
+    if (userData.role === UserRole.SUPER_ADMIN) {
+      // Only Super Admin can create another Super Admin
+      const createdBy = await User.findById(createdByUserId);
+      if (!createdBy || createdBy.role !== UserRole.SUPER_ADMIN) {
+        throw new ForbiddenError('Only Super Admin can create other Super Admin users');
+      }
+
+      // Super Admin should NOT have organizationId
+      if (userData.organizationId) {
+        throw new BadRequestError('Super Admin users should not have an organization ID');
+      }
+
+      // Check if email already exists globally for Super Admin
+      const existingSuperAdmin = await User.findOne({ 
+        email: userData.email,
+        role: UserRole.SUPER_ADMIN
+      });
+      if (existingSuperAdmin) {
+        throw new ConflictError('Super Admin with this email already exists');
+      }
+
+      // Create Super Admin (no organization-related validations needed)
+      const superAdmin = new User({
+        email: userData.email,
+        password: userData.password,
+        firstName: userData.firstName,
+        lastName: userData.lastName,
+        role: UserRole.SUPER_ADMIN,
+        createdBy: createdByUserId,
+      });
+
+      await superAdmin.save();
+      return superAdmin;
+    }
+
+    // For non-Super Admin users, organizationId is required
+    if (!userData.organizationId) {
+      throw new BadRequestError('Organization ID is required for non-Super Admin users');
+    }
+
     // Check if email already exists within the same organization
     const existingUser = await User.findOne({ 
       email: userData.email,

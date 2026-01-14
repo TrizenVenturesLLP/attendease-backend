@@ -6,7 +6,9 @@ import leaveRoutes from './leave.routes';
 import holidayRoutes from './holiday.routes';
 import departmentRoutes from './department.routes';
 import organizationRoutes from './organization.routes';
+import dashboardRoutes from './dashboard.routes';
 import healthRoutes from './health.routes';
+import payrollRoutes from './payroll.routes';
 
 const router = Router();
 
@@ -20,5 +22,7 @@ router.use('/leaves', leaveRoutes);
 router.use('/holidays', holidayRoutes);
 router.use('/departments', departmentRoutes);
 router.use('/organizations', organizationRoutes);
+router.use('/dashboard', dashboardRoutes);
+router.use('/payroll', payrollRoutes);
 
 export default router;
