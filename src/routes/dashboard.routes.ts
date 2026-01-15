@@ -15,11 +15,11 @@ router.use(tenantContext, allowOrganizationOverride);
 /**
  * @route   GET /api/dashboard/stats
  * @desc    Get dashboard statistics (role-based)
- * @access  Private (Admin/HR/Supervisor)
+ * @access  Private (Super Admin/Admin/HR/Supervisor)
  */
 router.get(
   '/stats',
-  authorize(UserRole.ADMIN, UserRole.HR, UserRole.SUPERVISOR),
+  authorize(UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.HR, UserRole.SUPERVISOR),
   dashboardController.getDashboardStats.bind(dashboardController)
 );
 

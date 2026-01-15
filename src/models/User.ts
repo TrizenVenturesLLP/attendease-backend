@@ -178,7 +178,15 @@ UserSchema.index({ organizationId: 1, department: 1 });
 UserSchema.index({ organizationId: 1, supervisorId: 1 });
 UserSchema.index({ organizationId: 1, role: 1 });
 // Microsoft authentication indexes
-UserSchema.index({ organizationId: 1, microsoftId: 1 }, { unique: true, sparse: true });
+// Use partialFilterExpression to only enforce uniqueness when microsoftId exists
+// This prevents issues with multiple null values in the same organization
+UserSchema.index(
+  { organizationId: 1, microsoftId: 1 }, 
+  { 
+    unique: true, 
+    partialFilterExpression: { microsoftId: { $type: 'string' } } 
+  }
+);
 
 const User = mongoose.model<IUser>('User', UserSchema);
 

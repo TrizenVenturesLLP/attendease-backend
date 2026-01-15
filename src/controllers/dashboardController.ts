@@ -17,7 +17,9 @@ class DashboardController {
       }
 
       const { role, userId } = req.user;
-      const organizationId = req.organizationId;
+      
+      // Super Admin doesn't need organizationId - they see system-wide stats
+      const organizationId = role === UserRole.SUPER_ADMIN ? undefined : req.organizationId;
 
       const stats = await dashboardService.getDashboardStats(userId, organizationId, role as UserRole);
 

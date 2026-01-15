@@ -34,9 +34,16 @@ class UserController {
         throw new ForbiddenError('Admin cannot create super admin or other admin users');
       }
 
-      // Super Admin must provide organizationId
-      if (req.user.role === UserRole.SUPER_ADMIN && !userData.organizationId) {
-        throw new BadRequestError('Organization ID is required for Super Admin');
+      // Super Admin creating another Super Admin doesn't need organizationId
+      // Super Admin creating organization Admin DOES need organizationId
+      if (req.user.role === UserRole.SUPER_ADMIN) {
+        if (userData.role === UserRole.ADMIN && !userData.organizationId) {
+          throw new BadRequestError('Organization ID is required when creating organization Admin');
+        }
+        if (userData.role === UserRole.SUPER_ADMIN && userData.organizationId) {
+          // Remove organizationId if creating Super Admin
+          delete userData.organizationId;
+        }
       }
 
       const user = await userService.createUser(userData, req.user.userId);

@@ -183,8 +183,29 @@ class MicrosoftAuthService {
       isActive: true,
     });
 
-    await user.save();
-    return user;
+    try {
+      await user.save();
+      return user;
+    } catch (error: any) {
+      // Handle duplicate key error (E11000)
+      if (error.code === 11000) {
+        // User might exist in another organization or due to legacy index
+        // Try to find the existing user globally
+        const existingUser = await User.findOne({ email });
+        
+        if (existingUser) {
+          if (existingUser.organizationId.toString() !== organizationId) {
+            throw new BadRequestError(
+              `This email is already registered with another organization. Please contact your administrator.`
+            );
+          }
+          // User exists in same org but wasn't found earlier (edge case)
+          return existingUser;
+        }
+      }
+      // Re-throw if it's not a duplicate key error or user not found
+      throw error;
+    }
   }
 
   /**

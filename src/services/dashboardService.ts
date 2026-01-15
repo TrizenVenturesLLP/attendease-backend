@@ -28,6 +28,8 @@ class DashboardService {
     userRole: UserRole
   ): Promise<DashboardStats> {
     switch (userRole) {
+      case UserRole.SUPER_ADMIN:
+        return this.getSuperAdminStats();
       case UserRole.ADMIN:
       case UserRole.HR:
         return this.getAdminHRStats(organizationId);
@@ -154,6 +156,63 @@ class DashboardService {
       absent,
       onLeave,
       total,
+    };
+  }
+
+  /**
+   * Get Super Admin dashboard statistics (system-wide)
+   */
+  private async getSuperAdminStats(): Promise<any> {
+    const Organization = (await import('../models/Organization')).default;
+    const User = (await import('../models/User')).default;
+
+    // Get organization statistics
+    const totalOrganizations = await Organization.countDocuments();
+    const activeOrganizations = await Organization.countDocuments({ isActive: true });
+    const inactiveOrganizations = await Organization.countDocuments({ isActive: false });
+
+    // Get organization counts by subscription plan
+    const planCounts = await Organization.aggregate([
+      {
+        $group: {
+          _id: '$subscriptionPlan',
+          count: { $sum: 1 }
+        }
+      }
+    ]);
+
+    const organizationsByPlan = {
+      free: 0,
+      basic: 0,
+      premium: 0,
+      enterprise: 0
+    };
+
+    planCounts.forEach((plan: any) => {
+      if (plan._id && organizationsByPlan.hasOwnProperty(plan._id)) {
+        organizationsByPlan[plan._id as keyof typeof organizationsByPlan] = plan.count;
+      }
+    });
+
+    // Get total users across all organizations (excluding Super Admin)
+    const totalUsers = await User.countDocuments({ 
+      role: { $ne: 'super_admin' } 
+    });
+
+    return {
+      totalOrganizations,
+      activeOrganizations,
+      inactiveOrganizations,
+      totalUsers,
+      organizationsByPlan,
+      todayAttendance: {
+        present: 0,
+        late: 0,
+        absent: 0,
+        onLeave: 0,
+        total: 0,
+      },
+      pendingLeaveApprovals: 0,
     };
   }
 }

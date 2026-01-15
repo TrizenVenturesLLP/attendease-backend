@@ -219,18 +219,22 @@ class AuthService {
   async getCurrentUser(userId: string): Promise<any> {
     const user = await User.findById(userId)
       .populate('supervisorId', 'firstName lastName email')
-      .populate('organizationId', 'name subscriptionPlan microsoftAuth')
       .lean();
 
     if (!user) {
       throw new NotFoundError('User not found');
     }
 
-    // Transform organizationId to organization if populated
-    const response: any = { ...user };
-    if (user.organizationId && typeof user.organizationId === 'object') {
-      response.organization = user.organizationId;
-      response.organizationId = (user.organizationId as any)._id?.toString();
+    // Super Admin doesn't have organizationId, others do
+    let response: any = { ...user };
+    if (user.organizationId) {
+      // Manually populate organization for non-Super Admin users
+      const Organization = (await import('../models/Organization')).default;
+      const org = await Organization.findById(user.organizationId).lean();
+      if (org) {
+        response.organization = org;
+        response.organizationId = org._id.toString();
+      }
     }
 
     return response;
