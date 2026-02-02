@@ -3,12 +3,18 @@ FROM node:20-alpine AS builder
 
 WORKDIR /app
 
+# Cache-bust: pass --build-arg CACHEBUST=$(date +%s) or CACHEBUST=$COMMIT_SHA to force fresh build
+ARG CACHEBUST=1
+
 # Copy package files
 COPY package*.json ./
 COPY tsconfig.json ./
 
-# Install dependencies
+# Install dependencies (cache invalidated when package*.json changes)
 RUN npm ci
+
+# Invalidate cache when CACHEBUST changes (pass --build-arg CACHEBUST=$(date +%s) in deployment)
+RUN echo "Cache bust: ${CACHEBUST}"
 
 # Copy source code
 COPY src ./src
