@@ -1,7 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import authService from '../services/authService';
 import { ApiResponse } from '../utils/ApiResponse';
-import { BadRequestError } from '../utils/AppError';
+import { BadRequestError, ForbiddenError } from '../utils/AppError';
 
 class AuthController {
   /**
@@ -18,6 +18,32 @@ class AuthController {
       }
 
       const result = await authService.login(email, password);
+
+      // Subdomain-aware guard:
+      // - Super Admin should only log in via the platform domain
+      // - Non-Super Admin users must belong to the organization resolved from subdomain
+      const isPlatform = req.isPlatform !== false;
+      const userRole = result.user.role;
+      const userOrgId = result.user.organizationId;
+
+      if (!isPlatform) {
+        // Tenant subdomain (e.g. acme.trizenhr.com)
+        if (userRole === 'super_admin') {
+          throw new ForbiddenError(
+            'Super Admin can only log in from the main platform domain'
+          );
+        }
+
+        if (!req.organizationId || !userOrgId) {
+          throw new ForbiddenError('Organization context is missing for this login');
+        }
+
+        if (req.organizationId.toString() !== userOrgId.toString()) {
+          throw new ForbiddenError(
+            'This account does not belong to this organization. Please use your own company URL.'
+          );
+        }
+      }
 
       const response: ApiResponse<typeof result> = {
         success: true,

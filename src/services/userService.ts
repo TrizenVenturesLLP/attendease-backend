@@ -183,6 +183,16 @@ class UserService {
       query.role = filters.role;
     }
 
+    // HR can only see employees, supervisors, and other HR (not Admin or Super Admin)
+    if (requesterRole === UserRole.HR) {
+      const allowedRolesForHR = [UserRole.EMPLOYEE, UserRole.SUPERVISOR, UserRole.HR];
+      if (query.role && !allowedRolesForHR.includes(query.role as UserRole)) {
+        query.role = { $in: allowedRolesForHR };
+      } else if (!query.role) {
+        query.role = { $in: allowedRolesForHR };
+      }
+    }
+
     if (filters?.department) {
       query.department = filters.department;
     }

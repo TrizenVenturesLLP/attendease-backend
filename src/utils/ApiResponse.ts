@@ -28,7 +28,8 @@ declare global {
   namespace Express {
     interface Request {
       user?: JwtPayload;
-      organizationId?: string; // Set by tenantContext middleware
+      organizationId?: string; // Set by tenant / subdomain context middleware
+      isPlatform?: boolean; // True for platform domain, false for tenant subdomains
     }
   }
 }
