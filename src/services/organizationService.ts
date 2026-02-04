@@ -43,6 +43,15 @@ export interface OrganizationStats {
   isActive: boolean;
 }
 
+/** Normalize subdomain to a single slug (e.g. "xyz.org" -> "xyz"). Model only allows [a-z0-9-]+. */
+function normalizeSubdomainSlug(value: string | undefined): string | undefined {
+  if (value == null || typeof value !== 'string') return undefined;
+  const trimmed = value.trim().toLowerCase();
+  if (!trimmed) return undefined;
+  const slug = trimmed.includes('.') ? trimmed.split('.')[0]! : trimmed;
+  return slug || undefined;
+}
+
 class OrganizationService {
   /**
    * Create a new organization (Super Admin only)
@@ -63,10 +72,11 @@ class OrganizationService {
       );
     }
 
+    const subdomainSlug = normalizeSubdomainSlug(data.subdomain);
     // Check if subdomain is already taken
-    if (data.subdomain) {
+    if (subdomainSlug) {
       const existingSubdomain = await Organization.findOne({
-        subdomain: data.subdomain,
+        subdomain: subdomainSlug,
       });
       if (existingSubdomain) {
         throw new ConflictError('Subdomain is already taken');
@@ -76,7 +86,7 @@ class OrganizationService {
     // Create organization with default settings
     const organization = await Organization.create({
       name: data.name.trim(),
-      subdomain: data.subdomain?.trim().toLowerCase(),
+      subdomain: subdomainSlug,
       subscriptionPlan: data.subscriptionPlan || SubscriptionPlan.FREE,
       subscriptionExpiry: data.subscriptionExpiry,
       settings: {
@@ -165,13 +175,14 @@ class OrganizationService {
       }
     }
 
+    const subdomainSlug = normalizeSubdomainSlug(data.subdomain);
     // Check for subdomain uniqueness if subdomain is being updated
     if (
-      data.subdomain &&
-      data.subdomain !== organization.subdomain
+      subdomainSlug !== undefined &&
+      subdomainSlug !== organization.subdomain
     ) {
       const existingSubdomain = await Organization.findOne({
-        subdomain: data.subdomain,
+        subdomain: subdomainSlug,
       });
       if (existingSubdomain) {
         throw new ConflictError('Subdomain is already taken');
@@ -181,7 +192,7 @@ class OrganizationService {
     // Update fields
     if (data.name) organization.name = data.name.trim();
     if (data.subdomain !== undefined)
-      organization.subdomain = data.subdomain?.trim().toLowerCase();
+      organization.subdomain = subdomainSlug ?? undefined;
     if (data.isActive !== undefined) organization.isActive = data.isActive;
     if (data.subscriptionPlan)
       organization.subscriptionPlan = data.subscriptionPlan;
