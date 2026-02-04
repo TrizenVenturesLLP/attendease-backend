@@ -20,9 +20,13 @@ function getRootDomain(): string | null {
  * - Determine whether the request is for the platform (main domain) or a tenant (subdomain)
  * - For tenant requests, resolve the organization by subdomain and attach organizationId to the request
  *
- * Examples:
- * - trizenhr.com, www.trizenhr.com          -> platform (req.isPlatform = true)
- * - acme.trizenhr.com, xyz.trizenhr.com     -> tenant  (req.organizationId = org._id)
+ * URL patterns (controlled by TENANT_SUBDOMAIN_SEGMENT):
+ * - When set (e.g. "org"): tenant URLs are abc.org.trizenhr.com; org.trizenhr.com is platform.
+ * - When empty: tenant URLs are abc.trizenhr.com (first label = tenant slug).
+ *
+ * Examples (with TENANT_SUBDOMAIN_SEGMENT=org):
+ * - trizenhr.com, www.trizenhr.com, org.trizenhr.com -> platform
+ * - abc.org.trizenhr.com, company1.org.trizenhr.com   -> tenant (slug = abc, company1)
  *
  * Notes:
  * - In development (localhost), all requests are treated as platform-level.
@@ -80,8 +84,27 @@ export async function subdomainContext(
       return next();
     }
 
-    // In case of multi-level subdomains, only use the first label as org slug (e.g. "app.acme" -> "app")
-    const primarySubdomain = subdomainPart.split('.')[0];
+    const segment = config.tenantSubdomainSegment;
+
+    let primarySubdomain: string;
+    if (segment) {
+      // Tenant URLs: <slug>.org.trizenhr.com → subdomainPart = "slug.org"
+      if (subdomainPart === segment) {
+        req.isPlatform = true;
+        return next();
+      }
+      if (!subdomainPart.endsWith(`.${segment}`)) {
+        req.isPlatform = true;
+        return next();
+      }
+      primarySubdomain = subdomainPart.slice(0, -(segment.length + 1)); // part before ".org"
+      if (!primarySubdomain) {
+        req.isPlatform = true;
+        return next();
+      }
+    } else {
+      primarySubdomain = subdomainPart.split('.')[0];
+    }
 
     // Lookup organization by subdomain
     const organization = await Organization.findOne({

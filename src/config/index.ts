@@ -19,6 +19,8 @@ interface Config {
   jwtExpiresIn: string;
   corsOrigin: string | string[];
   frontendUrl: string;
+  /** Optional fixed subdomain for tenants (e.g. "org" -> abc.org.trizenhr.com). Empty = tenant at first label (abc.trizenhr.com). */
+  tenantSubdomainSegment: string;
   microsoft: MicrosoftConfig;
 }
 
@@ -32,6 +34,7 @@ const config: Config = {
     ? process.env.CORS_ORIGIN.split(',').map(origin => origin.trim())
     : ['http://localhost:3000'],
   frontendUrl: process.env.FRONTEND_URL || 'http://localhost:3000',
+  tenantSubdomainSegment: (process.env.TENANT_SUBDOMAIN_SEGMENT || '').trim().toLowerCase(),
   microsoft: {
     clientId: process.env.MICROSOFT_CLIENT_ID || '',
     clientSecret: process.env.MICROSOFT_CLIENT_SECRET || '',
