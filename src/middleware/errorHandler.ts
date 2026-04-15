@@ -24,6 +24,14 @@ export const errorHandler = (
     statusCode = err.statusCode;
     message = err.message;
     isOperational = err.isOperational;
+  } else if ((err as any)?.name === 'MongoServerError' && (err as any)?.code === 11000) {
+    // Duplicate key from MongoDB (e.g., unique index violations)
+    statusCode = 409;
+    isOperational = true;
+    const duplicateField = Object.keys((err as any).keyPattern || {})[0];
+    message = duplicateField
+      ? `${duplicateField} already exists`
+      : 'Duplicate value violates a unique constraint';
   }
 
   // Log error for non-operational errors

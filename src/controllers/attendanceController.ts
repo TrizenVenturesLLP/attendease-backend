@@ -85,13 +85,14 @@ export class AttendanceController {
   async getMyAttendance(req: Request, res: Response): Promise<void> {
     try {
       const userId = req.user!.userId;
-      const { startDate, endDate, page, limit } = req.query;
+      const { startDate, endDate, status, page, limit } = req.query;
 
       const result = await attendanceService.getUserAttendance(
         userId,
         req.organizationId!,
         startDate ? new Date(startDate as string) : undefined,
         endDate ? new Date(endDate as string) : undefined,
+        status ? (status as AttendanceStatus) : undefined,
         page ? parseInt(page as string) : undefined,
         limit ? parseInt(limit as string) : undefined
       );
@@ -189,6 +190,7 @@ export class AttendanceController {
         req.organizationId!,
         startDate ? new Date(startDate as string) : undefined,
         endDate ? new Date(endDate as string) : undefined,
+        undefined,
         page ? parseInt(page as string) : undefined,
         limit ? parseInt(limit as string) : undefined
       );

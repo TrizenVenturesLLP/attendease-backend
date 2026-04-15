@@ -65,6 +65,17 @@ router.get(
 );
 
 /**
+ * @route   GET /api/users/next-employee-id
+ * @desc    Get next available employee ID for organization
+ * @access  Private (Admin/HR - org scoped)
+ */
+router.get(
+  '/next-employee-id',
+  authorize(UserRole.ADMIN, UserRole.HR),
+  userController.getNextEmployeeId
+);
+
+/**
  * @route   GET /api/users/:id
  * @desc    Get user by ID
  * @access  Private (All authenticated users)

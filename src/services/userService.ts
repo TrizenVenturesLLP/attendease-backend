@@ -42,6 +42,71 @@ export interface UserFilters {
 }
 
 class UserService {
+  private normalizeEmployeeId(input?: string): string | undefined {
+    if (!input) return undefined;
+    const trimmed = String(input).trim();
+    if (!trimmed) return undefined;
+
+    // Accept either digits (e.g. "6") or full code (e.g. "EMP006")
+    const digitsOnly = trimmed.match(/^\d+$/);
+    const empCode = trimmed.match(/^EMP(\d+)$/i);
+
+    const numericPart = digitsOnly?.[0] ?? empCode?.[1];
+    if (!numericPart) {
+      return undefined;
+    }
+
+    const num = parseInt(numericPart, 10);
+    if (!Number.isFinite(num) || num <= 0) {
+      return undefined;
+    }
+
+    return `EMP${String(num).padStart(3, '0')}`;
+  }
+
+  async getNextEmployeeId(organizationId: string): Promise<{ nextEmployeeId: string; existingSample: string[] }> {
+    const orgObjectId = new mongoose.Types.ObjectId(organizationId);
+
+    const agg = await User.aggregate([
+      {
+        $match: {
+          organizationId: orgObjectId,
+          employeeId: { $regex: /^EMP\d+$/ },
+        },
+      },
+      {
+        $project: {
+          employeeId: 1,
+          num: {
+            $toInt: {
+              $substrBytes: [
+                '$employeeId',
+                3,
+                { $subtract: [{ $strLenBytes: '$employeeId' }, 3] },
+              ],
+            },
+          },
+        },
+      },
+      { $group: { _id: null, maxNum: { $max: '$num' } } },
+    ]);
+
+    const maxNum = agg?.[0]?.maxNum ?? 0;
+    const nextNum = maxNum + 1;
+    const nextEmployeeId = `EMP${String(nextNum).padStart(3, '0')}`;
+
+    const existingSampleDocs = await User.find({ organizationId, employeeId: { $regex: /^EMP\d+$/ } })
+      .select('employeeId')
+      .sort({ createdAt: -1 })
+      .limit(5)
+      .lean();
+
+    return {
+      nextEmployeeId,
+      existingSample: existingSampleDocs.map((d: any) => d.employeeId).filter(Boolean),
+    };
+  }
+
   /**
    * Create a new user (Super Admin/Admin/HR only)
    */
@@ -110,6 +175,18 @@ class UserService {
       throw new BadRequestError('Organization ID is required for non-Super Admin users');
     }
 
+    // Auto-generate / normalize employeeId for org-scoped users
+    if (!userData.employeeId) {
+      const { nextEmployeeId } = await this.getNextEmployeeId(userData.organizationId);
+      userData.employeeId = nextEmployeeId;
+    } else {
+      const normalized = this.normalizeEmployeeId(userData.employeeId);
+      if (!normalized) {
+        throw new BadRequestError('Invalid employee ID format');
+      }
+      userData.employeeId = normalized;
+    }
+
     // Check if email already exists within the same organization
     const existingUser = await User.findOne({ 
       email: userData.email,
@@ -119,15 +196,13 @@ class UserService {
       throw new ConflictError('Email already in use in this organization');
     }
 
-    // Check if employeeId already exists within the same organization (if provided)
-    if (userData.employeeId) {
-      const existingEmployee = await User.findOne({ 
-        employeeId: userData.employeeId,
-        organizationId: userData.organizationId
-      });
-      if (existingEmployee) {
-        throw new ConflictError('Employee ID already in use in this organization');
-      }
+    // Check if employeeId already exists within the same organization
+    const existingEmployee = await User.findOne({
+      employeeId: userData.employeeId,
+      organizationId: userData.organizationId,
+    });
+    if (existingEmployee) {
+      throw new ConflictError('Employee ID already in use in this organization');
     }
 
     // Validate supervisor if provided (must be in same organization)
@@ -377,16 +452,23 @@ class UserService {
   /**
    * Delete user (soft delete by setting isActive to false)
    */
-  async deleteUser(userId: string): Promise<void> {
+  async deleteUser(userId: string, requesterUserId: string, requesterRole?: UserRole): Promise<void> {
     const user = await User.findById(userId);
 
     if (!user) {
       throw new NotFoundError('User not found');
     }
 
-    // Prevent deleting super admin
+    // Prevent self-deletion for all roles to avoid locking out current session.
+    if (user._id.toString() === requesterUserId.toString()) {
+      throw new ForbiddenError('You cannot delete your own account');
+    }
+
+    // Only Super Admin can delete Super Admin users.
     if (user.role === UserRole.SUPER_ADMIN) {
-      throw new ForbiddenError('Cannot delete super admin');
+      if (requesterRole !== UserRole.SUPER_ADMIN) {
+        throw new ForbiddenError('Only Super Admin can delete System Admin users');
+      }
     }
 
     user.isActive = false;

@@ -1,7 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
 import config from '../config';
-import { UnauthorizedError } from '../utils/AppError';
+import { ForbiddenError, UnauthorizedError } from '../utils/AppError';
 import { JwtPayload } from '../utils/ApiResponse';
 
 /**
@@ -48,7 +48,7 @@ export const authorize = (...allowedRoles: string[]) => {
     }
 
     if (!allowedRoles.includes(req.user.role)) {
-      next(new UnauthorizedError('Insufficient permissions'));
+      next(new ForbiddenError('Insufficient permissions'));
       return;
     }
 

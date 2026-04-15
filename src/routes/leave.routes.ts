@@ -44,4 +44,11 @@ router.get(
   leaveController.getAllLeaves.bind(leaveController)
 );
 
+// Supervisor/HR/Admin - view team leaves (supervisor gets only their team)
+router.get(
+  '/team',
+  authorize('supervisor', 'hr', 'admin', 'super_admin'),
+  leaveController.getTeamLeaves.bind(leaveController)
+);
+
 export default router;

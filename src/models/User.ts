@@ -98,7 +98,6 @@ const UserSchema = new Schema<IUser>(
     },
     employeeId: {
       type: String,
-      unique: true,
       sparse: true, // Allows multiple null values
       trim: true,
     },

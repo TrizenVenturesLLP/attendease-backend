@@ -271,6 +271,68 @@ export class LeaveService {
   }
 
   /**
+   * Get leaves for a supervisor's team (or all leaves for HR/Admin)
+   */
+  async getTeamLeaves(
+    organizationId: string,
+    requesterRole: string,
+    requesterUserId: string,
+    filters?: {
+      userId?: string;
+      status?: LeaveStatus;
+      leaveType?: LeaveType;
+      startDate?: Date;
+      endDate?: Date;
+    },
+    page: number = 1,
+    limit: number = 50
+  ): Promise<any> {
+    const query: any = { organizationId };
+
+    if (filters?.status) query.status = filters.status;
+    if (filters?.leaveType) query.leaveType = filters.leaveType;
+
+    if (filters?.startDate || filters?.endDate) {
+      query.startDate = {};
+      if (filters.startDate) query.startDate.$gte = startOfDay(filters.startDate);
+      if (filters.endDate) query.startDate.$lte = endOfDay(filters.endDate);
+    }
+
+    // Supervisors: restrict to team members only (and ignore explicit userId filter if it’s outside team).
+    if (requesterRole === 'supervisor') {
+      const teamMembers = await User.find({ supervisorId: requesterUserId }).select('_id');
+      const teamMemberIds = teamMembers.map((u) => u._id);
+      query.userId = { $in: teamMemberIds };
+    } else if (filters?.userId) {
+      // HR/Admin/Super Admin can filter by any user
+      query.userId = filters.userId;
+    }
+
+    const skip = (page - 1) * limit;
+
+    const [records, total] = await Promise.all([
+      Leave.find(query)
+        .populate('userId', 'firstName lastName email employeeId department')
+        .populate('reviewedBy', 'firstName lastName')
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .lean(),
+      Leave.countDocuments(query),
+    ]);
+
+    return {
+      records,
+      pagination: {
+        total,
+        page,
+        limit,
+        totalPages: Math.ceil(total / limit),
+      },
+    };
+  }
+
+  /**
    * Get leaves for calendar view
    */
   async getCalendarLeaves(

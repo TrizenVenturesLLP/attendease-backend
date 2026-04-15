@@ -121,7 +121,7 @@ class OrganizationService {
    * Get all organizations (Super Admin only)
    */
   async getAllOrganizations(): Promise<IOrganization[]> {
-    const organizations = await Organization.find()
+    const organizations = await Organization.find({ isActive: true })
       .populate('createdBy', 'firstName lastName email')
       .sort({ createdAt: -1 });
 

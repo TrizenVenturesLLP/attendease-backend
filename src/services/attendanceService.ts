@@ -1,4 +1,5 @@
 import Attendance, { AttendanceStatus } from '../models/Attendance';
+import User from '../models/User';
 import { startOfDay, endOfDay } from 'date-fns';
 import { minioStorage } from '../utils/storage/MinIOStorage';
 
@@ -120,6 +121,7 @@ export class AttendanceService {
     organizationId: string,
     startDate?: Date,
     endDate?: Date,
+    status?: AttendanceStatus,
     page: number = 1,
     limit: number = 30
   ): Promise<any> {
@@ -129,6 +131,10 @@ export class AttendanceService {
       query.date = {};
       if (startDate) query.date.$gte = startOfDay(startDate);
       if (endDate) query.date.$lte = endOfDay(endDate);
+    }
+
+    if (status) {
+      query.status = status;
     }
 
     const skip = (page - 1) * limit;
@@ -180,9 +186,8 @@ export class AttendanceService {
       leaveDays: records.filter((r) => r.status === AttendanceStatus.ON_LEAVE).length,
       totalWorkingHours: records.reduce((sum, r) => sum + (r.workingHours || 0), 0),
       averageWorkingHours:
-        records.filter((r) => r.workingHours).length > 0
-          ? records.reduce((sum, r) => sum + (r.workingHours || 0), 0) /
-            records.filter((r) => r.workingHours).length
+        records.length > 0
+          ? records.reduce((sum, r) => sum + (r.workingHours || 0), 0) / records.length
           : 0,
     };
 
@@ -219,6 +224,17 @@ export class AttendanceService {
 
     if (filters.status) {
       query.status = filters.status;
+    }
+
+    // Department filter: Attendance doesn't store department directly,
+    // so resolve matching user IDs from User collection first.
+    if (filters.department) {
+      const departmentUsers = await User.find({
+        organizationId,
+        department: filters.department,
+      }).select('_id');
+
+      query.userId = { $in: departmentUsers.map((u) => u._id) };
     }
 
     const skip = (page - 1) * limit;

@@ -11,7 +11,7 @@ router.get(
   '/my/settings',
   authenticate,
   tenantContext,
-  authorize(UserRole.ADMIN, UserRole.SUPER_ADMIN),
+  authorize(UserRole.ADMIN, UserRole.HR, UserRole.SUPER_ADMIN),
   organizationController.getMyOrganizationSettings
 );
 
@@ -19,7 +19,7 @@ router.put(
   '/my/settings',
   authenticate,
   tenantContext,
-  authorize(UserRole.ADMIN, UserRole.SUPER_ADMIN),
+  authorize(UserRole.ADMIN, UserRole.HR, UserRole.SUPER_ADMIN),
   organizationController.updateMyOrganizationSettings
 );
 

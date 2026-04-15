@@ -210,12 +210,17 @@ class PayrollService {
       organizationId,
       isActive: true,
     })
-      .populate('userId', 'firstName lastName email employeeId department')
+      .populate('userId', 'firstName lastName email employeeId department isActive')
       .populate('createdBy', 'firstName lastName')
       .sort({ createdAt: -1 });
 
+    // Exclude structures for soft-deleted users (isActive=false)
+    let filtered = structures.filter((s) => {
+      const user = s.userId as any;
+      return user && user.isActive !== false;
+    });
+    
     // Filter by department or search if provided
-    let filtered = structures;
     
     if (filters?.department) {
       filtered = filtered.filter(

@@ -271,9 +271,13 @@ class UserController {
    */
   async deleteUser(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
+      if (!req.user) {
+        throw new BadRequestError('User not authenticated');
+      }
+
       const { id } = req.params;
 
-      await userService.deleteUser(id);
+      await userService.deleteUser(id, req.user.userId, req.user.role as UserRole);
 
       const response: ApiResponse = {
         success: true,
@@ -300,6 +304,32 @@ class UserController {
         success: true,
         message: 'User statistics retrieved successfully',
         data: stats,
+        timestamp: new Date().toISOString(),
+      };
+
+      res.status(200).json(response);
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  /**
+   * @route   GET /api/users/next-employee-id
+   * @desc    Get next available employeeId for the current organization
+   * @access  Private (Admin/HR)
+   */
+  async getNextEmployeeId(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      if (!req.organizationId) {
+        throw new BadRequestError('Organization ID is required');
+      }
+
+      const result = await userService.getNextEmployeeId(req.organizationId);
+
+      const response: ApiResponse<typeof result> = {
+        success: true,
+        message: 'Next employee ID retrieved successfully',
+        data: result,
         timestamp: new Date().toISOString(),
       };
 

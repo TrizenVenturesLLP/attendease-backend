@@ -179,6 +179,46 @@ export class LeaveController {
   }
 
   /**
+   * Get team leaves (Supervisor sees only their team; HR/Admin see all)
+   */
+  async getTeamLeaves(req: Request, res: Response): Promise<void> {
+    try {
+      const requesterUserId = req.user!.userId;
+      const requesterRole = req.user!.role;
+      const { userId, status, leaveType, startDate, endDate, page, limit } = req.query;
+
+      const filters: any = {};
+      if (userId) filters.userId = userId as string;
+      if (status) filters.status = status as LeaveStatus;
+      if (leaveType) filters.leaveType = leaveType as LeaveType;
+      if (startDate) filters.startDate = new Date(startDate as string);
+      if (endDate) filters.endDate = new Date(endDate as string);
+
+      const result = await leaveService.getTeamLeaves(
+        req.organizationId!,
+        requesterRole,
+        requesterUserId,
+        filters,
+        page ? parseInt(page as string) : undefined,
+        limit ? parseInt(limit as string) : undefined
+      );
+
+      res.status(200).json({
+        success: true,
+        data: result.records,
+        pagination: result.pagination,
+        timestamp: new Date().toISOString(),
+      });
+    } catch (error: any) {
+      res.status(500).json({
+        success: false,
+        error: error.message || 'Failed to get team leaves',
+        timestamp: new Date().toISOString(),
+      });
+    }
+  }
+
+  /**
    * Get leaves for calendar view
    */
   async getCalendarLeaves(req: Request, res: Response): Promise<void> {
