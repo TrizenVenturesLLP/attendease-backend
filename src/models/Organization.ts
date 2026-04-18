@@ -36,6 +36,8 @@ export interface IOrganization extends Document {
   name: string;
   subdomain?: string;
   isActive: boolean;
+  /** Set when the organization is soft-deleted (removed from active operations). */
+  deletedAt?: Date;
   subscriptionPlan: SubscriptionPlan;
   subscriptionExpiry?: Date;
   settings: OrganizationSettings;
@@ -136,6 +138,10 @@ const OrganizationSchema = new Schema<IOrganization>(
     isActive: {
       type: Boolean,
       default: true,
+      index: true,
+    },
+    deletedAt: {
+      type: Date,
       index: true,
     },
     subscriptionPlan: {

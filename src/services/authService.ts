@@ -1,8 +1,13 @@
 import jwt from 'jsonwebtoken';
 import config from '../config';
-import User, { IUser, AuthProvider } from '../models/User';
+import User, { IUser, AuthProvider, UserRole } from '../models/User';
 import microsoftAuthService from './microsoftAuthService';
-import { BadRequestError, UnauthorizedError, NotFoundError } from '../utils/AppError';
+import {
+  BadRequestError,
+  UnauthorizedError,
+  NotFoundError,
+  ForbiddenError,
+} from '../utils/AppError';
 import { JwtPayload } from '../utils/ApiResponse';
 
 export interface LoginResult {
@@ -238,6 +243,45 @@ class AuthService {
     }
 
     return response;
+  }
+
+  /**
+   * Update platform-level UI preferences (System Admin only).
+   */
+  async updatePlatformPreferences(
+    userId: string,
+    role: string,
+    patch: { notifications?: Record<string, unknown> }
+  ): Promise<any> {
+    if (role !== UserRole.SUPER_ADMIN) {
+      throw new ForbiddenError('Only System Admins can update platform preferences');
+    }
+
+    const user = await User.findById(userId);
+    if (!user) {
+      throw new NotFoundError('User not found');
+    }
+
+    const prev = (user.platformPreferences as any)?.notifications || {};
+    const incoming = patch.notifications || {};
+    const next: Record<string, unknown> = { ...prev, ...incoming };
+
+    if (next.pollIntervalSec != null) {
+      const n = Number(next.pollIntervalSec);
+      if (Number.isFinite(n)) {
+        next.pollIntervalSec = Math.min(300, Math.max(15, Math.round(n)));
+      } else {
+        delete next.pollIntervalSec;
+      }
+    }
+
+    user.set('platformPreferences', {
+      ...(user.get('platformPreferences') || {}),
+      notifications: next,
+    });
+    await user.save();
+
+    return this.getCurrentUser(userId);
   }
 }
 

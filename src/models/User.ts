@@ -14,6 +14,16 @@ export enum AuthProvider {
   MICROSOFT = 'microsoft',
 }
 
+export interface PlatformNotificationPreferences {
+  pollIntervalSec?: number;
+  refreshOnTabFocus?: boolean;
+  showUnreadBadge?: boolean;
+}
+
+export interface PlatformPreferences {
+  notifications?: PlatformNotificationPreferences;
+}
+
 export interface IUser extends Document {
   organizationId: mongoose.Types.ObjectId;
   email: string;
@@ -27,6 +37,8 @@ export interface IUser extends Document {
   employeeId?: string;
   isActive: boolean;
   createdBy?: mongoose.Types.ObjectId;
+  /** System Admin (and reserved for future roles) — platform UI preferences */
+  platformPreferences?: PlatformPreferences;
   // Microsoft authentication fields
   authProvider: AuthProvider;
   microsoftId?: string;
@@ -35,6 +47,22 @@ export interface IUser extends Document {
   fullName: string;
   comparePassword(candidatePassword: string): Promise<boolean>;
 }
+
+const PlatformNotificationPrefsSchema = new Schema(
+  {
+    pollIntervalSec: { type: Number, min: 15, max: 300, default: 45 },
+    refreshOnTabFocus: { type: Boolean, default: true },
+    showUnreadBadge: { type: Boolean, default: true },
+  },
+  { _id: false }
+);
+
+const PlatformPreferencesSchema = new Schema(
+  {
+    notifications: { type: PlatformNotificationPrefsSchema, default: undefined },
+  },
+  { _id: false }
+);
 
 const UserSchema = new Schema<IUser>(
   {
@@ -120,6 +148,10 @@ const UserSchema = new Schema<IUser>(
       type: String,
       sparse: true,
       index: true,
+    },
+    platformPreferences: {
+      type: PlatformPreferencesSchema,
+      required: false,
     },
   },
   {

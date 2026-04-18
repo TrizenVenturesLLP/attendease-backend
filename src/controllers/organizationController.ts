@@ -1,6 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import organizationService from '../services/organizationService';
 import { ApiResponse } from '../utils/ApiResponse';
+import { ForbiddenError } from '../utils/AppError';
 
 class OrganizationController {
   /**
@@ -190,7 +191,7 @@ class OrganizationController {
   }
 
   /**
-   * Get current user's organization settings (Admin/HR)
+   * Get current user's organization settings (Admin / HR / Super Admin with org context)
    * GET /api/organizations/my/settings
    */
   async getMyOrganizationSettings(
@@ -200,7 +201,9 @@ class OrganizationController {
   ): Promise<void> {
     try {
       if (!req.organizationId) {
-        throw new Error('No organization associated with user');
+        throw new ForbiddenError(
+          'No organization context. Super Admins must select an organization or use a tenant URL.'
+        );
       }
 
       const settings = await organizationService.getOrganizationSettings(
@@ -221,7 +224,7 @@ class OrganizationController {
   }
 
   /**
-   * Update current user's organization settings (Admin/HR)
+   * Update current user's organization settings (Admin / HR / Super Admin with org context)
    * PUT /api/organizations/my/settings
    */
   async updateMyOrganizationSettings(
@@ -231,7 +234,9 @@ class OrganizationController {
   ): Promise<void> {
     try {
       if (!req.organizationId) {
-        throw new Error('No organization associated with user');
+        throw new ForbiddenError(
+          'No organization context. Super Admins must select an organization or use a tenant URL.'
+        );
       }
 
       const organization = await organizationService.updateOrganization(

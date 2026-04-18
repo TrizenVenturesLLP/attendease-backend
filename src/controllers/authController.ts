@@ -138,6 +138,35 @@ class AuthController {
   }
 
   /**
+   * PATCH /api/auth/me/platform-preferences
+   * System Admin platform UI preferences (notifications, etc.)
+   */
+  async updatePlatformPreferences(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      if (!req.user) {
+        throw new BadRequestError('User not authenticated');
+      }
+
+      const user = await authService.updatePlatformPreferences(
+        req.user.userId,
+        req.user.role,
+        { notifications: (req.body?.notifications as Record<string, unknown>) || {} }
+      );
+
+      const response: ApiResponse<typeof user> = {
+        success: true,
+        message: 'Preferences updated',
+        data: user,
+        timestamp: new Date().toISOString(),
+      };
+
+      res.status(200).json(response);
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  /**
    * @route   POST /api/auth/change-password
    * @desc    Change user password
    * @access  Private

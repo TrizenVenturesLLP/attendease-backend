@@ -193,7 +193,12 @@ class OrganizationService {
     if (data.name) organization.name = data.name.trim();
     if (data.subdomain !== undefined)
       organization.subdomain = subdomainSlug ?? undefined;
-    if (data.isActive !== undefined) organization.isActive = data.isActive;
+    if (data.isActive !== undefined) {
+      organization.isActive = data.isActive;
+      if (data.isActive === true) {
+        organization.deletedAt = undefined;
+      }
+    }
     if (data.subscriptionPlan)
       organization.subscriptionPlan = data.subscriptionPlan;
     if (data.subscriptionExpiry !== undefined)
@@ -257,8 +262,9 @@ class OrganizationService {
       throw new NotFoundError('Organization not found');
     }
 
-    // Soft delete by marking as inactive
+    // Soft delete: inactive + deletion timestamp (distinct from admin "paused" orgs)
     organization.isActive = false;
+    organization.deletedAt = new Date();
     await organization.save();
   }
 

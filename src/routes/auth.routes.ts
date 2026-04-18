@@ -33,6 +33,17 @@ router.post('/microsoft/callback', authController.microsoftCallback);
 router.get('/me', authenticate, authController.getCurrentUser);
 
 /**
+ * @route   PATCH /api/auth/me/platform-preferences
+ * @desc    Update System Admin platform preferences
+ * @access  Private (System Admin)
+ */
+router.patch(
+  '/me/platform-preferences',
+  authenticate,
+  authController.updatePlatformPreferences
+);
+
+/**
  * @route   POST /api/auth/change-password
  * @desc    Change password
  * @access  Private
