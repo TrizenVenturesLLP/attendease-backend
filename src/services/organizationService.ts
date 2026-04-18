@@ -5,6 +5,15 @@ import Organization, {
   MicrosoftAuthConfig,
 } from '../models/Organization';
 import User from '../models/User';
+import Attendance from '../models/Attendance';
+import Leave from '../models/Leave';
+import LeaveBalance from '../models/LeaveBalance';
+import Holiday from '../models/Holiday';
+import Department from '../models/Department';
+import SalaryStructure from '../models/SalaryStructure';
+import PayrollRecord from '../models/PayrollRecord';
+import PayrollRun from '../models/PayrollRun';
+import NotificationRead from '../models/NotificationRead';
 import {
   BadRequestError,
   NotFoundError,
@@ -118,10 +127,10 @@ class OrganizationService {
   }
 
   /**
-   * Get all organizations (Super Admin only)
+   * Get all organizations (Super Admin only) — includes active and inactive.
    */
   async getAllOrganizations(): Promise<IOrganization[]> {
-    const organizations = await Organization.find({ isActive: true })
+    const organizations = await Organization.find({})
       .populate('createdBy', 'firstName lastName email')
       .sort({ createdAt: -1 });
 
@@ -249,7 +258,8 @@ class OrganizationService {
   }
 
   /**
-   * Delete organization (soft delete)
+   * Permanently delete an organization and all tenant-scoped data.
+   * Use {@link updateOrganization} with isActive: false to pause an org without removing data.
    */
   async deleteOrganization(id: string): Promise<void> {
     if (!mongoose.Types.ObjectId.isValid(id)) {
@@ -262,10 +272,24 @@ class OrganizationService {
       throw new NotFoundError('Organization not found');
     }
 
-    // Soft delete: inactive + deletion timestamp (distinct from admin "paused" orgs)
-    organization.isActive = false;
-    organization.deletedAt = new Date();
-    await organization.save();
+    const orgObjectId = new mongoose.Types.ObjectId(id);
+
+    await PayrollRecord.deleteMany({ organizationId: orgObjectId });
+    await PayrollRun.deleteMany({ organizationId: orgObjectId });
+    await SalaryStructure.deleteMany({ organizationId: orgObjectId });
+    await Leave.deleteMany({ organizationId: orgObjectId });
+    await LeaveBalance.deleteMany({ organizationId: orgObjectId });
+    await Attendance.deleteMany({ organizationId: orgObjectId });
+    await Holiday.deleteMany({ organizationId: orgObjectId });
+    await Department.deleteMany({ organizationId: orgObjectId });
+
+    const userIds = await User.find({ organizationId: orgObjectId }).distinct('_id');
+    if (userIds.length > 0) {
+      await NotificationRead.deleteMany({ userId: { $in: userIds } });
+    }
+    await User.deleteMany({ organizationId: orgObjectId });
+
+    await Organization.findByIdAndDelete(id);
   }
 
   /**
