@@ -50,13 +50,16 @@ class OrganizationService {
   async createOrganization(
     data: CreateOrganizationData
   ): Promise<IOrganization> {
+    const normalizedName = data.name?.trim();
+    const normalizedSubdomain = data.subdomain?.trim().toLowerCase() || undefined;
+
     // Validate organization name
-    if (!data.name || data.name.trim().length === 0) {
+    if (!normalizedName || normalizedName.length === 0) {
       throw new BadRequestError('Organization name is required');
     }
 
     // Check if organization name already exists
-    const existingOrg = await Organization.findOne({ name: data.name });
+    const existingOrg = await Organization.findOne({ name: normalizedName });
     if (existingOrg) {
       throw new ConflictError(
         'Organization with this name already exists'
@@ -64,9 +67,9 @@ class OrganizationService {
     }
 
     // Check if subdomain is already taken
-    if (data.subdomain) {
+    if (normalizedSubdomain) {
       const existingSubdomain = await Organization.findOne({
-        subdomain: data.subdomain,
+        subdomain: normalizedSubdomain,
       });
       if (existingSubdomain) {
         throw new ConflictError('Subdomain is already taken');
@@ -75,8 +78,8 @@ class OrganizationService {
 
     // Create organization with default settings
     const organization = await Organization.create({
-      name: data.name.trim(),
-      subdomain: data.subdomain?.trim().toLowerCase(),
+      name: normalizedName,
+      subdomain: normalizedSubdomain,
       subscriptionPlan: data.subscriptionPlan || SubscriptionPlan.FREE,
       subscriptionExpiry: data.subscriptionExpiry,
       settings: {
@@ -155,9 +158,18 @@ class OrganizationService {
       throw new NotFoundError('Organization not found');
     }
 
+    const normalizedName = data.name?.trim();
+    const normalizedSubdomain =
+      data.subdomain !== undefined
+        ? data.subdomain.trim().toLowerCase() || undefined
+        : undefined;
+
     // Check for name uniqueness if name is being updated
-    if (data.name && data.name !== organization.name) {
-      const existingOrg = await Organization.findOne({ name: data.name });
+    if (
+      normalizedName &&
+      normalizedName !== organization.name
+    ) {
+      const existingOrg = await Organization.findOne({ name: normalizedName });
       if (existingOrg) {
         throw new ConflictError(
           'Organization with this name already exists'
@@ -167,11 +179,11 @@ class OrganizationService {
 
     // Check for subdomain uniqueness if subdomain is being updated
     if (
-      data.subdomain &&
-      data.subdomain !== organization.subdomain
+      data.subdomain !== undefined &&
+      normalizedSubdomain !== organization.subdomain
     ) {
       const existingSubdomain = await Organization.findOne({
-        subdomain: data.subdomain,
+        subdomain: normalizedSubdomain,
       });
       if (existingSubdomain) {
         throw new ConflictError('Subdomain is already taken');
@@ -179,9 +191,9 @@ class OrganizationService {
     }
 
     // Update fields
-    if (data.name) organization.name = data.name.trim();
+    if (normalizedName) organization.name = normalizedName;
     if (data.subdomain !== undefined)
-      organization.subdomain = data.subdomain?.trim().toLowerCase();
+      organization.subdomain = normalizedSubdomain;
     if (data.isActive !== undefined) organization.isActive = data.isActive;
     if (data.subscriptionPlan)
       organization.subscriptionPlan = data.subscriptionPlan;

@@ -1,5 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import organizationService from '../services/organizationService';
+import emailNotificationService from '../services/emailNotificationService';
 import { ApiResponse } from '../utils/ApiResponse';
 
 class OrganizationController {
@@ -13,10 +14,26 @@ class OrganizationController {
     next: NextFunction
   ): Promise<void> {
     try {
+      const {
+        companyAdminEmail,
+        companyAdminName,
+        ...organizationPayload
+      } = req.body;
+
       const organization = await organizationService.createOrganization({
-        ...req.body,
+        ...organizationPayload,
         createdBy: req.user?.userId,
       });
+
+      if (companyAdminEmail) {
+        void emailNotificationService.sendOrganizationCreatedFlow({
+          organizationId: organization._id.toString(),
+          organizationName: organization.name,
+          companyAdminEmail,
+          companyAdminName,
+          createdByUserId: req.user?.userId,
+        });
+      }
 
       const response: ApiResponse<typeof organization> = {
         success: true,

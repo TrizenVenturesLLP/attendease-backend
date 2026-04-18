@@ -19,6 +19,15 @@ interface Config {
   jwtExpiresIn: string;
   corsOrigin: string | string[];
   frontendUrl: string;
+  emailService: {
+    url: string;
+    authToken: string;
+    supportEmail: string;
+  };
+  invitation: {
+    baseUrl: string;
+    expiryDays: number;
+  };
   microsoft: MicrosoftConfig;
 }
 
@@ -32,6 +41,15 @@ const config: Config = {
     ? process.env.CORS_ORIGIN.split(',').map(origin => origin.trim())
     : ['http://localhost:3000'],
   frontendUrl: process.env.FRONTEND_URL || 'http://localhost:3000',
+  emailService: {
+    url: process.env.EMAIL_SERVICE_URL || 'http://localhost:3002',
+    authToken: process.env.EMAIL_SERVICE_AUTH_TOKEN || '',
+    supportEmail: process.env.TRIZEN_SUPPORT_EMAIL || 'support@trizenventures.com',
+  },
+  invitation: {
+    baseUrl: process.env.INVITATION_BASE_URL || `${process.env.FRONTEND_URL || 'http://localhost:3000'}/auth/set-password`,
+    expiryDays: parseInt(process.env.INVITATION_EXPIRY_DAYS || '7', 10),
+  },
   microsoft: {
     clientId: process.env.MICROSOFT_CLIENT_ID || '',
     clientSecret: process.env.MICROSOFT_CLIENT_SECRET || '',

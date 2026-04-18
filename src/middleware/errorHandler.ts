@@ -20,6 +20,16 @@ export const errorHandler = (
   let message = 'Internal Server Error';
   let isOperational = false;
 
+  // Handle MongoDB duplicate key errors as conflicts.
+  const mongoError = err as any;
+  if (mongoError?.code === 11000) {
+    statusCode = 409;
+    const duplicateFields = Object.keys(mongoError.keyPattern || {});
+    const fieldLabel = duplicateFields.length > 0 ? duplicateFields.join(', ') : 'field';
+    message = `Duplicate value for ${fieldLabel}`;
+    isOperational = true;
+  }
+
   if (err instanceof AppError) {
     statusCode = err.statusCode;
     message = err.message;
