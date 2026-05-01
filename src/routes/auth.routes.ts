@@ -10,6 +10,7 @@ const router = Router();
  * @access  Public
  */
 router.post('/login', authController.login);
+router.post('/accept-invitation', authController.acceptInvitation);
 
 /**
  * @route   GET /api/auth/microsoft/url

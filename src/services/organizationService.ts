@@ -69,7 +69,6 @@ class OrganizationService {
     data: CreateOrganizationData
   ): Promise<IOrganization> {
     const normalizedName = data.name?.trim();
-
     // Validate organization name
     if (!normalizedName || normalizedName.length === 0) {
       throw new BadRequestError('Organization name is required');

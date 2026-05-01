@@ -360,6 +360,34 @@ class AuthService {
 
     return this.getCurrentUser(userId);
   }
+
+  /**
+   * Accept an invitation and set password
+   */
+  async acceptInvitation(
+    email: string,
+    organizationId: string,
+    password: string
+  ): Promise<void> {
+    if (!email || !organizationId || !password) {
+      throw new BadRequestError('Email, organizationId, and password are required');
+    }
+
+    // Find the user by email AND organizationId for security
+    const user = await User.findOne({ 
+      email: email.toLowerCase(), 
+      organizationId,
+      isActive: true 
+    });
+
+    if (!user) {
+      throw new NotFoundError('Invalid invitation or user not found');
+    }
+
+    // Update password
+    user.password = password;
+    await user.save();
+  }
 }
 
 export default new AuthService();

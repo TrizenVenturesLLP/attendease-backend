@@ -1,5 +1,5 @@
 {
-  "name": "attendease-server",
+  "name": "trizenhr-backend",
   "version": "1.0.0",
   "description": "AttendEase Attendance ERP Backend",
   "main": "dist/index.js",
