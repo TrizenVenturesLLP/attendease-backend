@@ -69,8 +69,6 @@ class OrganizationService {
     data: CreateOrganizationData
   ): Promise<IOrganization> {
     const normalizedName = data.name?.trim();
-    const normalizedSubdomain = data.subdomain?.trim().toLowerCase() || undefined;
-
     // Validate organization name
     if (!normalizedName || normalizedName.length === 0) {
       throw new BadRequestError('Organization name is required');
@@ -178,11 +176,6 @@ class OrganizationService {
     }
 
     const normalizedName = data.name?.trim();
-    const normalizedSubdomain =
-      data.subdomain !== undefined
-        ? data.subdomain.trim().toLowerCase() || undefined
-        : undefined;
-
     // Check for name uniqueness if name is being updated
     if (
       normalizedName &&
