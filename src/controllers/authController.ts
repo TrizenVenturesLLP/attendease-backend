@@ -214,6 +214,29 @@ class AuthController {
       next(error);
     }
   }
+
+  /**
+   * @route   POST /api/auth/accept-invitation
+   * @desc    Accept invitation and set password
+   * @access  Public
+   */
+  async acceptInvitation(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const { email, organizationId, password } = req.body;
+
+      await authService.acceptInvitation(email, organizationId, password);
+
+      const response: ApiResponse = {
+        success: true,
+        message: 'Password set successfully. You can now login.',
+        timestamp: new Date().toISOString(),
+      };
+
+      res.status(200).json(response);
+    } catch (error) {
+      next(error);
+    }
+  }
 }
 
 export default new AuthController();
