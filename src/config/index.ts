@@ -21,6 +21,15 @@ interface Config {
   frontendUrl: string;
   /** Optional fixed subdomain for tenants (e.g. "org" -> abc.org.trizenhr.com). Empty = tenant at first label (abc.trizenhr.com). */
   tenantSubdomainSegment: string;
+  emailService: {
+    url: string;
+    authToken: string;
+    supportEmail: string;
+  };
+  invitation: {
+    baseUrl: string;
+    expiryDays: number;
+  };
   microsoft: MicrosoftConfig;
 }
 
@@ -30,11 +39,20 @@ const config: Config = {
   mongoUri: process.env.MONGO_URI!,
   jwtSecret: process.env.JWT_SECRET || 'your-super-secret-jwt-key-change-in-production',
   jwtExpiresIn: process.env.JWT_EXPIRES_IN || '7d',
-  corsOrigin: process.env.CORS_ORIGIN 
+  corsOrigin: process.env.CORS_ORIGIN
     ? process.env.CORS_ORIGIN.split(',').map(origin => origin.trim())
     : ['http://localhost:3000'],
   frontendUrl: process.env.FRONTEND_URL || 'http://localhost:3000',
   tenantSubdomainSegment: (process.env.TENANT_SUBDOMAIN_SEGMENT || '').trim().toLowerCase(),
+  emailService: {
+    url: process.env.EMAIL_SERVICE_URL || 'http://localhost:3002',
+    authToken: process.env.EMAIL_SERVICE_AUTH_TOKEN || '',
+    supportEmail: process.env.TRIZEN_SUPPORT_EMAIL || 'support@trizenventures.com',
+  },
+  invitation: {
+    baseUrl: process.env.INVITATION_BASE_URL || `${process.env.FRONTEND_URL || 'http://localhost:3000'}/auth/set-password`,
+    expiryDays: parseInt(process.env.INVITATION_EXPIRY_DAYS || '7', 10),
+  },
   microsoft: {
     clientId: process.env.MICROSOFT_CLIENT_ID || '',
     clientSecret: process.env.MICROSOFT_CLIENT_SECRET || '',

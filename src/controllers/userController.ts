@@ -1,5 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import userService, { CreateUserData, UpdateUserData, UserFilters } from '../services/userService';
+import emailNotificationService from '../services/emailNotificationService';
 import { ApiResponse } from '../utils/ApiResponse';
 import { BadRequestError, ForbiddenError } from '../utils/AppError';
 import { UserRole } from '../models/User';
@@ -47,6 +48,15 @@ class UserController {
       }
 
       const user = await userService.createUser(userData, req.user.userId);
+
+      void emailNotificationService.sendRoleInvitation({
+        email: user.email,
+        role: user.role as UserRole,
+        organizationId: user.organizationId?.toString(),
+        invitedByUserId: req.user.userId,
+        firstName: user.firstName,
+        lastName: user.lastName,
+      });
 
       const response: ApiResponse<typeof user> = {
         success: true,
