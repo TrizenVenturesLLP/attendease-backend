@@ -17,12 +17,15 @@ class AuthController {
         throw new BadRequestError('Email and password are required');
       }
 
-      const result = await authService.login(email, password);
-
       // Subdomain-aware guard:
       // - Super Admin should only log in via the platform domain
       // - Non-Super Admin users must belong to the organization resolved from subdomain
       const isPlatform = req.isPlatform !== false;
+      const result = await authService.login(
+        email,
+        password,
+        isPlatform ? undefined : req.organizationId
+      );
       const userRole = result.user.role;
       const userOrgId = result.user.organizationId;
 

@@ -41,22 +41,40 @@ const createApp = (): Application => {
           return normalizedAllowed === normalizedOrigin;
         });
 
-        // Allow any subdomain of the frontend root domain (e.g. *.trizenhr.com)
+        // Allow any subdomain of configured frontend root domains (e.g. *.trizenhr.in, *.lvh.me)
+        // Supports comma-separated FRONTEND_URL values for local + deployed environments.
         let isAllowedByRootDomain = false;
-        try {
-          const frontendUrl = new URL(config.frontendUrl);
-          const rootDomain = frontendUrl.hostname.toLowerCase();
+        if (originHost) {
+          const frontendCandidates = String(config.frontendUrl)
+            .split(',')
+            .map((s) => s.trim())
+            .filter(Boolean);
 
-          if (originHost) {
-            if (originHost === rootDomain || originHost.endsWith(`.${rootDomain}`)) {
-              isAllowedByRootDomain = true;
-            }
-          }
-        } catch {
-          // If frontendUrl is not a valid URL, skip root-domain based CORS
+          const rootDomains = frontendCandidates
+            .map((candidate) => {
+              try {
+                return new URL(candidate).hostname.toLowerCase();
+              } catch {
+                return null;
+              }
+            })
+            .filter((h): h is string => Boolean(h));
+
+          isAllowedByRootDomain = rootDomains.some((rootDomain) => {
+            return originHost === rootDomain || originHost.endsWith(`.${rootDomain}`);
+          });
         }
 
-        if (isAllowedExplicit || isAllowedByRootDomain) {
+        // Local subdomain testing convenience in non-production:
+        // allow *.lvh.me (e.g. google.org.lvh.me:3000) and lvh.me root.
+        const isAllowedLocalDevHost =
+          config.nodeEnv !== 'production' &&
+          Boolean(
+            originHost &&
+              (originHost === 'lvh.me' || originHost.endsWith('.lvh.me'))
+          );
+
+        if (isAllowedExplicit || isAllowedByRootDomain || isAllowedLocalDevHost) {
           callback(null, true);
         } else {
           console.warn(`CORS blocked origin: ${origin}`);

@@ -42,8 +42,10 @@ class UserController {
           throw new BadRequestError('Organization ID is required when creating organization Admin');
         }
         if (userData.role === UserRole.SUPER_ADMIN && userData.organizationId) {
-          // Remove organizationId if creating Super Admin
-          delete userData.organizationId;
+          // Prevent creating platform-level System Admin from organization-scoped flow
+          throw new BadRequestError(
+            'System Admin cannot be created with organization context. Use the system admin creation flow.'
+          );
         }
       }
 

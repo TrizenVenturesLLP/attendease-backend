@@ -15,6 +15,11 @@ export interface LoginResult {
   user: {
     id: string;
     organizationId?: string;
+    organization?: {
+      _id: string;
+      name: string;
+      subscriptionPlan: string;
+    };
     email: string;
     firstName: string;
     lastName: string;
@@ -30,13 +35,36 @@ class AuthService {
   /**
    * Authenticate user with email and password (local auth)
    */
-  async login(email: string, password: string): Promise<LoginResult> {
+  async login(
+    email: string,
+    password: string,
+    organizationId?: string
+  ): Promise<LoginResult> {
     if (!email || !password) {
       throw new BadRequestError('Email and password are required');
     }
 
-    // Find user and include password field
-    const user = await User.findOne({ email, isActive: true }).select('+password');
+    let user: IUser | null = null;
+
+    if (organizationId) {
+      // Tenant-scoped login: resolve user only within this organization
+      user = await User.findOne({
+        email,
+        isActive: true,
+        organizationId,
+      }).select('+password');
+    } else {
+      // Platform login: if email exists in multiple orgs, require tenant URL
+      const candidates = await User.find({ email, isActive: true })
+        .select('+password')
+        .limit(3);
+      if (candidates.length > 1) {
+        throw new UnauthorizedError(
+          'Multiple accounts found for this email. Please log in using your organization URL.'
+        );
+      }
+      user = candidates[0] || null;
+    }
 
     if (!user) {
       throw new UnauthorizedError('Invalid email or password');
@@ -52,6 +80,11 @@ class AuthService {
 
     if (!isPasswordValid) {
       throw new UnauthorizedError('Invalid email or password');
+    }
+
+    // Hydrate organization for non-Super Admin responses so UI can show org name immediately.
+    if (user.role !== UserRole.SUPER_ADMIN && user.organizationId) {
+      await user.populate('organizationId', 'name subscriptionPlan');
     }
 
     // Generate JWT token
@@ -127,6 +160,24 @@ class AuthService {
    * Other roles: Token includes organizationId for tenant isolation
    */
   generateToken(user: IUser): string {
+    const resolveOrganizationId = (): string | undefined => {
+      const orgRef: any = user.organizationId as any;
+      if (!orgRef) return undefined;
+      if (typeof orgRef === 'string') return orgRef;
+      if (typeof orgRef === 'object') {
+        if (orgRef._id) {
+          return orgRef._id.toString();
+        }
+        // ObjectId instance path
+        if (typeof orgRef.toString === 'function') {
+          const val = orgRef.toString();
+          // Guard against accidental "[object Object]" in token payload
+          return val && val !== '[object Object]' ? val : undefined;
+        }
+      }
+      return undefined;
+    };
+
     const payload: JwtPayload = {
       userId: user._id.toString(),
       email: user.email,
@@ -135,7 +186,10 @@ class AuthService {
 
     // Only include organizationId for non-Super Admin users
     if (user.role !== 'super_admin') {
-      payload.organizationId = user.organizationId?.toString();
+      const organizationId = resolveOrganizationId();
+      if (organizationId) {
+        payload.organizationId = organizationId;
+      }
     }
 
     return jwt.sign(payload, config.jwtSecret as string, {
@@ -147,11 +201,27 @@ class AuthService {
    * Create standardized login result
    */
   private createLoginResult(token: string, user: IUser): LoginResult {
+    const populatedOrg =
+      user.organizationId &&
+      typeof user.organizationId === 'object' &&
+      'name' in (user.organizationId as any)
+        ? (user.organizationId as any)
+        : null;
+
     return {
       token,
       user: {
         id: user._id.toString(),
-        organizationId: user.organizationId?.toString(),
+        organizationId: populatedOrg
+          ? populatedOrg._id?.toString?.() || String(populatedOrg._id)
+          : user.organizationId?.toString(),
+        organization: populatedOrg
+          ? {
+              _id: populatedOrg._id?.toString?.() || String(populatedOrg._id),
+              name: populatedOrg.name,
+              subscriptionPlan: populatedOrg.subscriptionPlan,
+            }
+          : undefined,
         email: user.email,
         firstName: user.firstName,
         lastName: user.lastName,
@@ -224,22 +294,29 @@ class AuthService {
   async getCurrentUser(userId: string): Promise<any> {
     const user = await User.findById(userId)
       .populate('supervisorId', 'firstName lastName email')
+      .populate('organizationId', 'name subscriptionPlan')
       .lean();
 
     if (!user) {
       throw new NotFoundError('User not found');
     }
 
-    // Super Admin doesn't have organizationId, others do
-    let response: any = { ...user };
-    if (user.organizationId) {
-      // Manually populate organization for non-Super Admin users
-      const Organization = (await import('../models/Organization')).default;
-      const org = await Organization.findById(user.organizationId).lean();
-      if (org) {
-        response.organization = org;
-        response.organizationId = org._id.toString();
-      }
+    const response: any = { ...user };
+    const populatedOrg =
+      user.organizationId &&
+      typeof user.organizationId === 'object' &&
+      'name' in (user.organizationId as any)
+        ? (user.organizationId as any)
+        : null;
+
+    if (populatedOrg) {
+      response.organization = {
+        _id: populatedOrg._id?.toString?.() || String(populatedOrg._id),
+        name: populatedOrg.name,
+        subscriptionPlan: populatedOrg.subscriptionPlan,
+      };
+      response.organizationId =
+        populatedOrg._id?.toString?.() || String(populatedOrg._id);
     }
 
     return response;
