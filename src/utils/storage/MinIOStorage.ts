@@ -78,11 +78,6 @@ export class MinIOStorage extends BaseStorage {
     // Support MINIO_REGION_NAME from CapRover, fallback to us-east-1
     this.region = config.region || process.env.MINIO_REGION_NAME || 'us-east-1';
 
-    // Validate required configuration
-    if (!this.accessKeyId || !this.secretAccessKey) {
-      console.warn('⚠️ MinIO credentials not configured. Storage operations will fail.');
-    }
-
     // Initialize S3 client (MinIO is S3-compatible)
     this.s3 = new AWS.S3({
       endpoint: this.endpoint,
@@ -100,26 +95,41 @@ export class MinIOStorage extends BaseStorage {
       maxRetries: 0,
     });
 
-    console.log('✅ MinIO Storage initialized', {
+    console.log('✅ MinIO Storage client ready', {
       endpoint: this.endpoint,
       bucket: this.bucketName,
       publicDomain: this.publicDomain || 'using endpoint',
       region: this.region,
     });
 
-    // Ensure bucket exists on initialization (non-blocking, runs in background)
-    if (this.accessKeyId && this.secretAccessKey) {
-      this.ensureBucketExists().catch(error => {
-        // Silent fail - will retry on actual upload
-        console.debug('Bucket validation skipped during init:', error.message);
-      });
-    } else {
+    if (!this.accessKeyId || !this.secretAccessKey) {
       console.warn('⚠️ MinIO credentials not configured - photo upload will be disabled');
     }
+    // No network calls here: bucket/connectivity is validated on first upload (or health check).
+  }
+
+  /** AWS SDK / network conditions where storage cannot be reached (not a missing bucket). */
+  private isStorageUnreachable(err: any): boolean {
+    if (!err) return false;
+    const code = err.code as string | undefined;
+    const msg = String(err.message || '');
+    if (code === 'NetworkingError' || code === 'TimeoutError' || code === 'UnknownEndpoint') {
+      return true;
+    }
+    if (
+      msg.includes('ETIMEDOUT') ||
+      msg.includes('ECONNREFUSED') ||
+      msg.includes('ENOTFOUND') ||
+      msg.includes('Inaccessible host') ||
+      msg.includes('getaddrinfo')
+    ) {
+      return true;
+    }
+    return false;
   }
 
   /**
-   * Ensure bucket exists, create if it doesn't
+   * Ensure bucket exists, create if it doesn't. Call only from uploads or explicit health checks.
    */
   private async ensureBucketExists(): Promise<boolean> {
     try {
@@ -127,59 +137,54 @@ export class MinIOStorage extends BaseStorage {
         throw new Error('MinIO credentials not configured');
       }
 
-      // Check if bucket exists with timeout
       try {
         await this.s3.headBucket({ Bucket: this.bucketName }).promise();
-        // Bucket exists - try to ensure public read policy
         try {
           await this.ensureBucketPolicy();
-        } catch (policyError) {
+        } catch {
           // Ignore policy errors - not critical
         }
         return true;
       } catch (headError: any) {
-        // Network/timeout errors - don't try to create, just fail fast
-        if (headError.code === 'NetworkingError' || headError.code === 'TimeoutError' || 
-            headError.message?.includes('ETIMEDOUT') || headError.message?.includes('ECONNREFUSED')) {
-          console.warn('⚠️ MinIO unreachable - photo uploads disabled temporarily');
+        if (this.isStorageUnreachable(headError)) {
           throw new Error('MinIO service unavailable');
         }
-        
-        // Bucket doesn't exist (404/NotFound) - proceed to create it
+
         if (headError.statusCode === 404 || headError.code === 'NotFound') {
           try {
             console.log(`📦 Bucket '${this.bucketName}' not found. Creating it...`);
             await this.s3.createBucket({ Bucket: this.bucketName }).promise();
-            
-            // Set bucket policy for public read access (ignore failures)
+
             try {
               await this.ensureBucketPolicy();
-            } catch (policyError) {
+            } catch {
               // Ignore policy errors - not critical
             }
-            
+
             console.log(`✅ Bucket '${this.bucketName}' created successfully`);
             return true;
           } catch (createError: any) {
-            // Handle race condition: bucket might have been created by another request
             if (
               createError.code === 'BucketAlreadyOwnedByYou' ||
               createError.code === 'BucketAlreadyExists'
             ) {
               return true;
             }
-            console.error('Error creating bucket:', createError.message);
+            if (this.isStorageUnreachable(createError)) {
+              throw new Error('MinIO service unavailable');
+            }
             throw createError;
           }
         }
         throw headError;
       }
     } catch (error: any) {
-      // Don't log full stack trace for network errors
-      if (error.message === 'MinIO service unavailable') {
+      if (error.message === 'MinIO service unavailable' || error.message === 'MinIO credentials not configured') {
         throw error;
       }
-      console.error('Failed to ensure bucket exists:', error.message);
+      if (this.isStorageUnreachable(error)) {
+        throw new Error('MinIO service unavailable');
+      }
       throw new Error(`Failed to ensure bucket exists: ${error.message}`);
     }
   }
@@ -232,7 +237,10 @@ export class MinIOStorage extends BaseStorage {
       try {
         await this.ensureBucketExists();
       } catch (bucketError: any) {
-        if (bucketError.message === 'MinIO service unavailable') {
+        if (
+          bucketError.message === 'MinIO service unavailable' ||
+          this.isStorageUnreachable(bucketError)
+        ) {
           throw new Error('Photo upload unavailable - storage service is not reachable');
         }
         throw bucketError;
@@ -277,6 +285,8 @@ export class MinIOStorage extends BaseStorage {
       
       if (error.message?.includes('unavailable') || error.message?.includes('unreachable')) {
         errorMessage = error.message;
+      } else if (this.isStorageUnreachable(error)) {
+        errorMessage = 'Storage service is not reachable';
       } else if (error.code === 'NetworkingError' || error.code === 'TimeoutError' ||
                  error.message?.includes('ETIMEDOUT') || error.message?.includes('ECONNREFUSED')) {
         errorMessage = 'Storage service is not reachable';
