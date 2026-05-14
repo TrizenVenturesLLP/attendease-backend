@@ -71,10 +71,12 @@ class OrganizationService {
     const normalizedName = data.name?.trim();
     // Validate organization name
     if (!normalizedName || normalizedName.length === 0) {
+    if (!normalizedName || normalizedName.length === 0) {
       throw new BadRequestError('Organization name is required');
     }
 
     // Check if organization name already exists
+    const existingOrg = await Organization.findOne({ name: normalizedName });
     const existingOrg = await Organization.findOne({ name: normalizedName });
     if (existingOrg) {
       throw new ConflictError(
@@ -182,6 +184,11 @@ class OrganizationService {
       normalizedName !== organization.name
     ) {
       const existingOrg = await Organization.findOne({ name: normalizedName });
+    if (
+      normalizedName &&
+      normalizedName !== organization.name
+    ) {
+      const existingOrg = await Organization.findOne({ name: normalizedName });
       if (existingOrg) {
         throw new ConflictError(
           'Organization with this name already exists'
@@ -204,6 +211,7 @@ class OrganizationService {
     }
 
     // Update fields
+    if (normalizedName) organization.name = normalizedName;
     if (normalizedName) organization.name = normalizedName;
     if (data.subdomain !== undefined)
       organization.subdomain = subdomainSlug ?? undefined;
