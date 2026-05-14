@@ -21,7 +21,6 @@ interface Config {
   frontendUrl: string;
   emailService: {
     url: string;
-    authToken: string;
     supportEmail: string;
   };
   invitation: {
@@ -43,7 +42,6 @@ const config: Config = {
   frontendUrl: process.env.FRONTEND_URL || 'http://localhost:3000',
   emailService: {
     url: process.env.EMAIL_SERVICE_URL || 'http://localhost:3002',
-    authToken: process.env.EMAIL_SERVICE_AUTH_TOKEN || '',
     supportEmail: process.env.TRIZEN_SUPPORT_EMAIL || 'support@trizenventures.com',
   },
   invitation: {

@@ -24,7 +24,6 @@ class EmailNotificationService {
   private getHeaders(userId?: string) {
     return {
       'Content-Type': 'application/json',
-      'X-Service-Auth': config.emailService.authToken,
       'X-Service-Name': 'trizenhr_backend',
       ...(userId ? { 'X-User-Id': userId } : {}),
     };
@@ -79,7 +78,7 @@ class EmailNotificationService {
   }
 
   async sendOrganizationCreatedFlow(input: OrganizationCreatedEmailInput): Promise<void> {
-    if (!config.emailService.url || !config.emailService.authToken) {
+    if (!config.emailService.url) {
       return;
     }
 
@@ -111,7 +110,7 @@ class EmailNotificationService {
   }
 
   async sendRoleInvitation(input: UserInvitationInput): Promise<void> {
-    if (!config.emailService.url || !config.emailService.authToken) {
+    if (!config.emailService.url) {
       return;
     }
 
