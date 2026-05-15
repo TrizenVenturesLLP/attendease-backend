@@ -21,6 +21,16 @@ interface UserInvitationInput {
 }
 
 class EmailNotificationService {
+  private isEmailConfigured(): boolean {
+    return Boolean(config.emailService.url && config.emailService.authToken);
+  }
+
+  private warnEmailSkipped(flow: string): void {
+    console.warn(
+      `[EmailNotificationService] Skipping ${flow}: set EMAIL_SERVICE_URL and EMAIL_SERVICE_AUTH_TOKEN (must match email service SERVICE_AUTH_TOKEN)`
+    );
+  }
+
   private getHeaders(userId?: string) {
     return {
       'Content-Type': 'application/json',
@@ -79,7 +89,8 @@ class EmailNotificationService {
   }
 
   async sendOrganizationCreatedFlow(input: OrganizationCreatedEmailInput): Promise<void> {
-    if (!config.emailService.url || !config.emailService.authToken) {
+    if (!this.isEmailConfigured()) {
+      this.warnEmailSkipped('organization-created');
       return;
     }
 
@@ -111,7 +122,8 @@ class EmailNotificationService {
   }
 
   async sendRoleInvitation(input: UserInvitationInput): Promise<void> {
-    if (!config.emailService.url || !config.emailService.authToken) {
+    if (!this.isEmailConfigured()) {
+      this.warnEmailSkipped('role-invitation');
       return;
     }
 

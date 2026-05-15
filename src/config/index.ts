@@ -45,7 +45,7 @@ const config: Config = {
   frontendUrl: process.env.FRONTEND_URL || 'http://localhost:3000',
   tenantSubdomainSegment: (process.env.TENANT_SUBDOMAIN_SEGMENT || '').trim().toLowerCase(),
   emailService: {
-    url: process.env.EMAIL_SERVICE_URL || 'http://localhost:3002',
+    url: process.env.EMAIL_SERVICE_URL || 'http://localhost:4007',
     authToken: process.env.EMAIL_SERVICE_AUTH_TOKEN || '',
     supportEmail: process.env.TRIZEN_SUPPORT_EMAIL || 'support@trizenventures.com',
   },
