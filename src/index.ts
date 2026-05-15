@@ -1,11 +1,14 @@
 import createApp from './app';
 import config from './config';
 import connectDB from './config/db';
+import { logEmailServiceConfigAtStartup } from './services/emailNotificationService';
 
 const startServer = async (): Promise<void> => {
   try {
     // Connect to MongoDB
     await connectDB();
+
+    logEmailServiceConfigAtStartup();
 
     // Create Express app
     const app = createApp();

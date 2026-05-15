@@ -54,11 +54,10 @@ export const tenantContext = async (
           'Organization mismatch between token and subdomain'
         );
       }
-    } else {
-      // Platform context (e.g. current deployment without subdomains, or main domain):
-      // fall back to using organizationId from the token as the tenant context.
-      req.organizationId = organizationId;
     }
+
+    // Always attach org from JWT for downstream handlers (platform + tenant).
+    req.organizationId = req.organizationId ?? organizationId;
 
     next();
   } catch (error) {

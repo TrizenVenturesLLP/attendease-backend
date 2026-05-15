@@ -94,6 +94,12 @@ class EmailNotificationService {
       return;
     }
 
+    console.info('[EmailNotificationService] Triggering organization-created email', {
+      organizationId: input.organizationId,
+      companyAdminEmail: input.companyAdminEmail,
+      emailServiceUrl: config.emailService.url,
+    });
+
     const inviteExpiresAt = this.getInviteExpiryDate();
     const inviteLink = this.buildInviteLink('company_admin', input.companyAdminEmail, input.organizationId);
     const createdByName = await this.getDisplayName(input.createdByUserId);
@@ -116,8 +122,17 @@ class EmailNotificationService {
           timeout: 5000,
         }
       );
+      console.info('[EmailNotificationService] organization-created email accepted by email service', {
+        organizationId: input.organizationId,
+        companyAdminEmail: input.companyAdminEmail,
+      });
     } catch (error: any) {
-      console.warn('Organization-created email flow failed:', error?.message || error);
+      const status = error?.response?.status;
+      const detail = error?.response?.data;
+      console.warn('Organization-created email flow failed:', error?.message || error, {
+        status,
+        detail,
+      });
     }
   }
 
@@ -128,8 +143,16 @@ class EmailNotificationService {
     }
 
     if (input.role === UserRole.SUPER_ADMIN) {
+      console.info('[EmailNotificationService] Skipping role-invitation for SUPER_ADMIN');
       return;
     }
+
+    console.info('[EmailNotificationService] Triggering role-invitation email', {
+      email: input.email,
+      role: input.role,
+      organizationId: input.organizationId,
+      emailServiceUrl: config.emailService.url,
+    });
 
     const expiresAt = this.getInviteExpiryDate();
     const mappedRole = this.mapRoleForEmailService(input.role);
@@ -163,9 +186,38 @@ class EmailNotificationService {
           timeout: 5000,
         }
       );
+      console.info('[EmailNotificationService] role-invitation email accepted by email service', {
+        email: input.email,
+        role: input.role,
+      });
     } catch (error: any) {
-      console.warn('Role invitation email flow failed:', error?.message || error);
+      const status = error?.response?.status;
+      const detail = error?.response?.data;
+      console.warn('Role invitation email flow failed:', error?.message || error, {
+        status,
+        detail,
+      });
     }
+  }
+}
+
+export function logEmailServiceConfigAtStartup(): void {
+  const urlSet = Boolean(config.emailService.url);
+  const tokenSet = Boolean(config.emailService.authToken);
+  const configured = urlSet && tokenSet;
+
+  console.info('[EmailNotificationService] Startup config', {
+    configured,
+    emailServiceUrl: urlSet ? config.emailService.url : '(missing EMAIL_SERVICE_URL)',
+    authTokenSet: tokenSet,
+    supportEmail: config.emailService.supportEmail,
+    invitationBaseUrl: config.invitation.baseUrl,
+  });
+
+  if (!configured) {
+    console.warn(
+      '[EmailNotificationService] Emails are DISABLED until EMAIL_SERVICE_URL and EMAIL_SERVICE_AUTH_TOKEN are set in CapRover (token must match email service SERVICE_AUTH_TOKEN)'
+    );
   }
 }
 

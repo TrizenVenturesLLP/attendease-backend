@@ -18,6 +18,10 @@ export class LeaveService {
    * Get or create leave balance for user/year
    */
   private async getOrCreateLeaveBalance(userId: string, year: number, organizationId: string) {
+    if (!organizationId) {
+      throw new Error('Organization context is required for leave balance');
+    }
+
     let balance = await LeaveBalance.findOne({ userId, year, organizationId });
 
     if (!balance) {

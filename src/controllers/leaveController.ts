@@ -1,14 +1,40 @@
 import { Request, Response } from 'express';
 import { leaveService } from '../services/leaveService';
 import { LeaveType, LeaveStatus } from '../models/Leave';
+import { resolveOrganizationId } from '../utils/resolveOrganizationId';
+import { ForbiddenError } from '../utils/AppError';
 
 export class LeaveController {
+  private async getOrganizationId(req: Request): Promise<string> {
+    return resolveOrganizationId(req);
+  }
+
+  private handleError(res: Response, error: unknown, fallback: string, status = 500): void {
+    if (error instanceof ForbiddenError) {
+      res.status(403).json({
+        success: false,
+        error: error.message,
+        timestamp: new Date().toISOString(),
+      });
+      return;
+    }
+
+    const message = error instanceof Error ? error.message : fallback;
+    console.error(`${fallback}:`, error);
+    res.status(status).json({
+      success: false,
+      error: message,
+      timestamp: new Date().toISOString(),
+    });
+  }
+
   /**
    * Request new leave
    */
   async requestLeave(req: Request, res: Response): Promise<void> {
     try {
       const userId = req.user!.userId;
+      const organizationId = await this.getOrganizationId(req);
       const { leaveType, startDate, endDate, reason } = req.body;
 
       // Validation
@@ -23,7 +49,7 @@ export class LeaveController {
 
       const leave = await leaveService.requestLeave(
         userId,
-        req.organizationId!,
+        organizationId,
         leaveType as LeaveType,
         new Date(startDate),
         new Date(endDate),
@@ -51,6 +77,7 @@ export class LeaveController {
   async getMyLeaves(req: Request, res: Response): Promise<void> {
     try {
       const userId = req.user!.userId;
+      const organizationId = await this.getOrganizationId(req);
       const { status, startDate, endDate, page, limit } = req.query;
 
       const filters: any = {};
@@ -60,7 +87,7 @@ export class LeaveController {
 
       const result = await leaveService.getMyLeaves(
         userId,
-        req.organizationId!,
+        organizationId,
         filters,
         page ? parseInt(page as string) : undefined,
         limit ? parseInt(limit as string) : undefined
@@ -87,11 +114,12 @@ export class LeaveController {
   async getMyBalance(req: Request, res: Response): Promise<void> {
     try {
       const userId = req.user!.userId;
+      const organizationId = await this.getOrganizationId(req);
       const { year } = req.query;
 
       const balance = await leaveService.getMyBalance(
         userId,
-        req.organizationId!,
+        organizationId,
         year ? parseInt(year as string) : undefined
       );
 
@@ -100,13 +128,8 @@ export class LeaveController {
         data: balance,
         timestamp: new Date().toISOString(),
       });
-    } catch (error: any) {
-      console.error('Get balance error:', error);
-      res.status(500).json({
-        success: false,
-        error: error.message || 'Failed to get leave balance',
-        timestamp: new Date().toISOString(),
-      });
+    } catch (error: unknown) {
+      this.handleError(res, error, 'Get balance error');
     }
   }
 
@@ -117,11 +140,12 @@ export class LeaveController {
     try {
       const userId = req.user!.userId;
       const userRole = req.user!.role;
+      const organizationId = await this.getOrganizationId(req);
       const { page, limit } = req.query;
 
       const result = await leaveService.getPendingLeaves(
         userId,
-        req.organizationId!,
+        organizationId,
         userRole,
         page ? parseInt(page as string) : undefined,
         limit ? parseInt(limit as string) : undefined
@@ -156,8 +180,10 @@ export class LeaveController {
       if (startDate) filters.startDate = new Date(startDate as string);
       if (endDate) filters.endDate = new Date(endDate as string);
 
+      const organizationId = await this.getOrganizationId(req);
+
       const result = await leaveService.getAllLeaves(
-        req.organizationId!,
+        organizationId,
         filters,
         page ? parseInt(page as string) : undefined,
         limit ? parseInt(limit as string) : undefined
@@ -194,8 +220,10 @@ export class LeaveController {
       if (startDate) filters.startDate = new Date(startDate as string);
       if (endDate) filters.endDate = new Date(endDate as string);
 
+      const organizationId = await this.getOrganizationId(req);
+
       const result = await leaveService.getTeamLeaves(
-        req.organizationId!,
+        organizationId,
         requesterRole,
         requesterUserId,
         filters,
@@ -247,8 +275,10 @@ export class LeaveController {
         targetUserId = filterUserId as string;
       }
 
+      const organizationId = await this.getOrganizationId(req);
+
       const leaves = await leaveService.getCalendarLeaves(
-        req.organizationId!,
+        organizationId,
         parseInt(month as string),
         parseInt(year as string),
         targetUserId,
