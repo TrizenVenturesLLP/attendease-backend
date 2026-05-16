@@ -5,6 +5,7 @@
 // 3. Email/employeeId uniqueness is per-organization
 // 4. Supervisor validation checks same organization
 
+import crypto from 'crypto';
 import User, { IUser, UserRole } from '../models/User';
 import {
   BadRequestError,
@@ -17,7 +18,7 @@ import mongoose from 'mongoose';
 export interface CreateUserData {
   organizationId?: string; // Optional for Super Admin (platform-level), required for others
   email: string;
-  password: string;
+  password?: string;
   firstName: string;
   lastName: string;
   role: UserRole;
@@ -137,6 +138,9 @@ class UserService {
 
     // Special handling for Super Admin
     if (userData.role === UserRole.SUPER_ADMIN) {
+      if (!userData.password) {
+        throw new BadRequestError('Password is required for Super Admin users');
+      }
       // Only Super Admin can create another Super Admin
       if (createdBy.role !== UserRole.SUPER_ADMIN) {
         throw new ForbiddenError('Only Super Admin can create other Super Admin users');
@@ -173,6 +177,10 @@ class UserService {
     // For non-Super Admin users, organizationId is required
     if (!userData.organizationId) {
       throw new BadRequestError('Organization ID is required for non-Super Admin users');
+    }
+
+    if (!userData.password) {
+      userData.password = crypto.randomBytes(12).toString('hex');
     }
 
     // Auto-generate / normalize employeeId for org-scoped users
@@ -471,8 +479,7 @@ class UserService {
       }
     }
 
-    user.isActive = false;
-    await user.save();
+    await User.deleteOne({ _id: user._id });
   }
 
   /**

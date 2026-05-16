@@ -2,6 +2,8 @@ import jwt from 'jsonwebtoken';
 import config from '../config';
 import User, { IUser, AuthProvider, UserRole } from '../models/User';
 import microsoftAuthService from './microsoftAuthService';
+import emailNotificationService from './emailNotificationService';
+import crypto from 'crypto';
 import {
   BadRequestError,
   UnauthorizedError,
@@ -386,6 +388,82 @@ class AuthService {
 
     // Update password
     user.password = password;
+    await user.save();
+  }
+
+  /**
+   * Request password reset
+   */
+  async forgotPassword(email: string): Promise<void> {
+    if (!email) {
+      throw new BadRequestError('Email is required');
+    }
+
+    const user = await User.findOne({ email: email.toLowerCase(), isActive: true });
+
+    if (!user) {
+      // For security reasons, don't reveal if user exists or not
+      // Just return success even if user not found
+      return;
+    }
+
+    // Generate reset token
+    const resetToken = crypto.randomBytes(32).toString('hex');
+    const resetPasswordToken = crypto
+      .createHash('sha256')
+      .update(resetToken)
+      .digest('hex');
+
+    // Token expires in 1 hour
+    const resetPasswordExpires = new Date(Date.now() + 3600000);
+
+    user.resetPasswordToken = resetPasswordToken;
+    user.resetPasswordExpires = resetPasswordExpires;
+    await user.save();
+
+    // Build reset link - using frontendUrl instead of invitation baseUrl
+    const resetLink = `${config.frontendUrl}/reset-password?token=${resetToken}`;
+
+    // Send email
+    await emailNotificationService.sendPasswordReset(
+      user.email,
+      user.fullName,
+      resetLink,
+      resetPasswordExpires
+    );
+  }
+
+  /**
+   * Reset password with token
+   */
+  async resetPassword(token: string, newPassword: string): Promise<void> {
+    if (!token || !newPassword) {
+      throw new BadRequestError('Token and new password are required');
+    }
+
+    if (newPassword.length < 6) {
+      throw new BadRequestError('Password must be at least 6 characters');
+    }
+
+    const resetPasswordToken = crypto
+      .createHash('sha256')
+      .update(token)
+      .digest('hex');
+
+    const user = await User.findOne({
+      resetPasswordToken,
+      resetPasswordExpires: { $gt: new Date() },
+      isActive: true,
+    }).select('+resetPasswordToken +resetPasswordExpires');
+
+    if (!user) {
+      throw new BadRequestError('Token is invalid or has expired');
+    }
+
+    // Update password
+    user.password = newPassword;
+    user.resetPasswordToken = undefined;
+    user.resetPasswordExpires = undefined;
     await user.save();
   }
 }

@@ -240,6 +240,52 @@ class AuthController {
       next(error);
     }
   }
+
+  /**
+   * @route   POST /api/auth/forgot-password
+   * @desc    Request password reset email
+   * @access  Public
+   */
+  async forgotPassword(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const { email } = req.body;
+
+      await authService.forgotPassword(email);
+
+      const response: ApiResponse = {
+        success: true,
+        message: 'If an account with that email exists, a password reset link has been sent.',
+        timestamp: new Date().toISOString(),
+      };
+
+      res.status(200).json(response);
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  /**
+   * @route   POST /api/auth/reset-password
+   * @desc    Reset password using token
+   * @access  Public
+   */
+  async resetPassword(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const { token, password } = req.body;
+
+      await authService.resetPassword(token, password);
+
+      const response: ApiResponse = {
+        success: true,
+        message: 'Password has been reset successfully.',
+        timestamp: new Date().toISOString(),
+      };
+
+      res.status(200).json(response);
+    } catch (error) {
+      next(error);
+    }
+  }
 }
 
 export default new AuthController();
