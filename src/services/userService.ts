@@ -526,7 +526,7 @@ class UserService {
   }
 
   /**
-   * Delete user (soft delete by setting isActive to false)
+   * Delete user — permanently removes from the database.
    */
   async deleteUser(userId: string, requesterUserId: string, requesterRole?: UserRole): Promise<void> {
     const user = await User.findById(userId);
@@ -535,12 +535,12 @@ class UserService {
       throw new NotFoundError('User not found');
     }
 
-    // Prevent self-deletion for all roles to avoid locking out current session.
+    // Prevent self-deletion
     if (user._id.toString() === requesterUserId.toString()) {
       throw new ForbiddenError('You cannot delete your own account');
     }
 
-    // Only Super Admin can delete Super Admin users.
+    // Only Super Admin can delete Super Admin users
     if (user.role === UserRole.SUPER_ADMIN) {
       if (requesterRole !== UserRole.SUPER_ADMIN) {
         throw new ForbiddenError('Only Super Admin can delete System Admin users');
