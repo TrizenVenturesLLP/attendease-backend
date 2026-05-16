@@ -48,45 +48,17 @@ class EmailNotificationService {
     return now;
   }
 
-  private resolveTenantBaseUrl(organization?: { subdomain?: string | null }): string {
-    const baseUrl = config.invitation.baseUrl;
-    const subdomain = organization?.subdomain?.trim().toLowerCase();
-    if (!subdomain) {
-      return baseUrl;
-    }
-
-    try {
-      const url = new URL(baseUrl);
-      const host = url.hostname.toLowerCase();
-
-      if (host === 'localhost' || host === '127.0.0.1') {
-        return baseUrl;
-      }
-
-      const segment = config.tenantSubdomainSegment;
-      const tenantHost = segment
-        ? `${subdomain}.${segment}.${host}`
-        : `${subdomain}.${host}`;
-
-      url.hostname = tenantHost;
-      return url.toString();
-    } catch {
-      return baseUrl;
-    }
-  }
-
   private buildInviteLink(
     role: string,
     email: string,
-    organization?: { _id?: string; subdomain?: string | null }
+    organizationId?: string
   ) {
-    const baseUrl = this.resolveTenantBaseUrl(organization);
-    const url = new URL(baseUrl);
+    const url = new URL(config.invitation.baseUrl);
     url.searchParams.set('role', role);
     url.searchParams.set('email', email);
 
-    if (organization?._id) {
-      url.searchParams.set('organizationId', organization._id);
+    if (organizationId) {
+      url.searchParams.set('organizationId', organizationId);
     }
 
     return url.toString();
@@ -134,11 +106,10 @@ class EmailNotificationService {
     });
 
     const inviteExpiresAt = this.getInviteExpiryDate();
-    const organization = await Organization.findById(input.organizationId).select('subdomain');
     const inviteLink = this.buildInviteLink(
       'company_admin',
       input.companyAdminEmail,
-      organization ? { _id: input.organizationId, subdomain: organization.subdomain } : { _id: input.organizationId }
+      input.organizationId
     );
     const createdByName = await this.getDisplayName(input.createdByUserId);
 
@@ -196,18 +167,14 @@ class EmailNotificationService {
     const mappedRole = this.mapRoleForEmailService(input.role);
 
     let organizationName: string | undefined;
-    let organizationSubdomain: string | undefined;
     if (input.organizationId) {
-      const organization = await Organization.findById(input.organizationId).select('name subdomain');
+      const organization = await Organization.findById(input.organizationId).select('name');
       organizationName = organization?.name;
-      organizationSubdomain = organization?.subdomain;
     }
     const inviteLink = this.buildInviteLink(
       mappedRole,
       input.email,
       input.organizationId
-        ? { _id: input.organizationId, subdomain: organizationSubdomain }
-        : undefined
     );
 
     const inviterName = await this.getDisplayName(input.invitedByUserId);
