@@ -95,8 +95,7 @@ class UserController {
       const users = await userService.getAllUsers(
         filters, 
         req.organizationId,
-        req.user.role as UserRole,
-        req.user.userId
+        req.user.role as UserRole
       );
 
       const response: ApiResponse<typeof users> = {

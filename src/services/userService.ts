@@ -40,6 +40,7 @@ export interface UserFilters {
   department?: string;
   isActive?: boolean;
   search?: string;
+  organizationId?: string; // Optional override for Super Admin
 }
 
 class UserService {
@@ -183,10 +184,12 @@ class UserService {
       userData.password = crypto.randomBytes(12).toString('hex');
     }
 
-    // Auto-generate / normalize employeeId for org-scoped users
+    // Auto-generate / normalize employeeId for org-scoped users (skip for Company Admin)
     if (!userData.employeeId) {
-      const { nextEmployeeId } = await this.getNextEmployeeId(userData.organizationId);
-      userData.employeeId = nextEmployeeId;
+      if (userData.role !== UserRole.ADMIN) {
+        const { nextEmployeeId } = await this.getNextEmployeeId(userData.organizationId);
+        userData.employeeId = nextEmployeeId;
+      }
     } else {
       const normalized = this.normalizeEmployeeId(userData.employeeId);
       if (!normalized) {
@@ -246,21 +249,37 @@ class UserService {
   async getAllUsers(
     filters?: UserFilters, 
     organizationId?: string, 
-    requesterRole?: UserRole, 
-    requesterId?: string
+    requesterRole?: UserRole
   ): Promise<IUser[]> {
     const query: any = {};
 
-    // Add organization filter (required for non-Super Admin)
-    if (organizationId) {
-      query.organizationId = organizationId;
+    // Enforce organization isolation for all roles except Super Admin
+    if (requesterRole !== UserRole.SUPER_ADMIN) {
+      if (!organizationId) {
+        throw new ForbiddenError('Organization identification is required');
+      }
+      query.organizationId = new mongoose.Types.ObjectId(organizationId);
+    } else if (filters?.organizationId) {
+      // Super Admin can optionally filter by organization
+      query.organizationId = new mongoose.Types.ObjectId(filters.organizationId);
     }
 
-    // SUPERVISORS (Managers) can only see their own team (Employee role only)
-    if (requesterRole === UserRole.SUPERVISOR) {
-      query.role = UserRole.EMPLOYEE;
-      if (requesterId) {
-        query.supervisorId = requesterId;
+    // SUPERVISORS (Managers) visibility rules
+    // Requirement: Show users in their organization who are NOT HR or Company Admin
+    if (requesterRole === UserRole.SUPERVISOR || (requesterRole as string) === 'manager') {
+      // Exclude: Super Admin, Admin (Company Admin), and HR
+      query.role = { 
+        $nin: [UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.HR] 
+      };
+      
+      // If a specific role filter was requested, combine it (still within allowed roles)
+      if (filters?.role) {
+        const forbiddenRoles = [UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.HR];
+        if (forbiddenRoles.includes(filters.role)) {
+          query.role = '__HIDDEN__';
+        } else {
+          query.role = filters.role;
+        }
       }
     }
 
@@ -329,9 +348,12 @@ class UserService {
    * Get team members for a supervisor
    */
   async getTeamMembers(supervisorId: string, organizationId?: string): Promise<IUser[]> {
-    const query: any = { supervisorId, isActive: true };
+    const query: any = { 
+      supervisorId: new mongoose.Types.ObjectId(supervisorId), 
+      isActive: true 
+    };
     if (organizationId) {
-      query.organizationId = organizationId;
+      query.organizationId = new mongoose.Types.ObjectId(organizationId);
     }
 
     const users = await User.find(query)
@@ -355,9 +377,9 @@ class UserService {
       throw new BadRequestError('Invalid user ID');
     }
 
-    const query: any = { _id: userId };
+    const query: any = { _id: new mongoose.Types.ObjectId(userId) };
     if (organizationId) {
-      query.organizationId = organizationId;
+      query.organizationId = new mongoose.Types.ObjectId(organizationId);
     }
 
     const user = await User.findOne(query)
@@ -375,13 +397,9 @@ class UserService {
         throw new ForbiddenError('HR Admin cannot access Company Admin profiles');
       }
     } else if (requesterRole === UserRole.SUPERVISOR) {
-      // Manager can only see EMPLOYEE
+      // Manager can see any EMPLOYEE in the organization
       if (user.role !== UserRole.EMPLOYEE && user._id.toString() !== requesterId) {
         throw new ForbiddenError('Managers can only access Employee profiles');
-      }
-      // Optional: Check if they are in the manager's team
-      if (user.role === UserRole.EMPLOYEE && user.supervisorId?.toString() !== requesterId) {
-        throw new ForbiddenError('Managers can only access their own team members');
       }
     } else if (requesterRole === UserRole.EMPLOYEE) {
       // Employees can only see themselves
