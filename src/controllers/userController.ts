@@ -167,9 +167,17 @@ class UserController {
    */
   async getUserById(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
+      if (!req.user) {
+        throw new BadRequestError('User not authenticated');
+      }
       const { id } = req.params;
 
-      const user = await userService.getUserById(id, req.organizationId);
+      const user = await userService.getUserById(
+        id, 
+        req.organizationId,
+        req.user.role as UserRole,
+        req.user.userId
+      );
 
       const response: ApiResponse<typeof user> = {
         success: true,
@@ -198,8 +206,13 @@ class UserController {
       const { id } = req.params;
       const updates: UpdateUserData = req.body;
 
-      // Pass requester role for permission validation
-      const user = await userService.updateUser(id, updates, req.user.role as UserRole);
+      // Pass requester role and ID for permission validation
+      const user = await userService.updateUser(
+        id, 
+        updates, 
+        req.user.role as UserRole,
+        req.user.userId
+      );
 
       const response: ApiResponse<typeof user> = {
         success: true,

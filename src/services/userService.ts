@@ -5,6 +5,7 @@
 // 3. Email/employeeId uniqueness is per-organization
 // 4. Supervisor validation checks same organization
 
+import crypto from 'crypto';
 import User, { IUser, UserRole } from '../models/User';
 import {
   BadRequestError,
@@ -17,7 +18,7 @@ import mongoose from 'mongoose';
 export interface CreateUserData {
   organizationId?: string; // Optional for Super Admin (platform-level), required for others
   email: string;
-  password: string;
+  password?: string;
   firstName: string;
   lastName: string;
   role: UserRole;
@@ -137,6 +138,9 @@ class UserService {
 
     // Special handling for Super Admin
     if (userData.role === UserRole.SUPER_ADMIN) {
+      if (!userData.password) {
+        throw new BadRequestError('Password is required for Super Admin users');
+      }
       // Only Super Admin can create another Super Admin
       if (createdBy.role !== UserRole.SUPER_ADMIN) {
         throw new ForbiddenError('Only Super Admin can create other Super Admin users');
@@ -173,6 +177,10 @@ class UserService {
     // For non-Super Admin users, organizationId is required
     if (!userData.organizationId) {
       throw new BadRequestError('Organization ID is required for non-Super Admin users');
+    }
+
+    if (!userData.password) {
+      userData.password = crypto.randomBytes(12).toString('hex');
     }
 
     // Auto-generate / normalize employeeId for org-scoped users
@@ -248,24 +256,31 @@ class UserService {
       query.organizationId = organizationId;
     }
 
-    // SUPERVISORS can only see their own team
-    if (requesterRole === UserRole.SUPERVISOR && requesterId) {
-      query.supervisorId = requesterId;
+    // SUPERVISORS (Managers) can only see their own team (Employee role only)
+    if (requesterRole === UserRole.SUPERVISOR) {
+      query.role = UserRole.EMPLOYEE;
+      if (requesterId) {
+        query.supervisorId = requesterId;
+      }
     }
 
-    // Apply filters
-    if (filters?.role) {
-      query.role = filters.role;
-    }
-
-    // HR can only see employees, supervisors, and other HR (not Admin or Super Admin)
+    // HR can only see HR, SUPERVISOR, and EMPLOYEE roles (NOT Admin or Super Admin)
     if (requesterRole === UserRole.HR) {
-      const allowedRolesForHR = [UserRole.EMPLOYEE, UserRole.SUPERVISOR, UserRole.HR];
-      if (query.role && !allowedRolesForHR.includes(query.role as UserRole)) {
-        query.role = { $in: allowedRolesForHR };
-      } else if (!query.role) {
+      const allowedRolesForHR = [UserRole.HR, UserRole.SUPERVISOR, UserRole.EMPLOYEE];
+      if (filters?.role) {
+        if (!allowedRolesForHR.includes(filters.role)) {
+          query.role = '__HIDDEN__'; // Force no results
+        } else {
+          query.role = filters.role;
+        }
+      } else {
         query.role = { $in: allowedRolesForHR };
       }
+    }
+
+    // Apply role filter if not already set by hierarchy rules above
+    if (filters?.role && !query.role) {
+      query.role = filters.role;
     }
 
     if (filters?.department) {
@@ -330,7 +345,12 @@ class UserService {
    * Get user by ID
    * organizationId is used to verify user belongs to organization (if provided)
    */
-  async getUserById(userId: string, organizationId?: string): Promise<IUser> {
+  async getUserById(
+    userId: string, 
+    organizationId?: string,
+    requesterRole?: UserRole,
+    requesterId?: string
+  ): Promise<IUser> {
     if (!mongoose.Types.ObjectId.isValid(userId)) {
       throw new BadRequestError('Invalid user ID');
     }
@@ -346,6 +366,28 @@ class UserService {
 
     if (!user) {
       throw new NotFoundError('User not found');
+    }
+
+    // Role-based visibility check
+    if (requesterRole === UserRole.HR) {
+      // HR cannot see ADMIN or SUPER_ADMIN
+      if (user.role === UserRole.ADMIN || user.role === UserRole.SUPER_ADMIN) {
+        throw new ForbiddenError('HR Admin cannot access Company Admin profiles');
+      }
+    } else if (requesterRole === UserRole.SUPERVISOR) {
+      // Manager can only see EMPLOYEE
+      if (user.role !== UserRole.EMPLOYEE && user._id.toString() !== requesterId) {
+        throw new ForbiddenError('Managers can only access Employee profiles');
+      }
+      // Optional: Check if they are in the manager's team
+      if (user.role === UserRole.EMPLOYEE && user.supervisorId?.toString() !== requesterId) {
+        throw new ForbiddenError('Managers can only access their own team members');
+      }
+    } else if (requesterRole === UserRole.EMPLOYEE) {
+      // Employees can only see themselves
+      if (user._id.toString() !== requesterId) {
+        throw new ForbiddenError('Employees can only access their own profile');
+      }
     }
 
     return user;
@@ -403,17 +445,33 @@ class UserService {
    * Update user information
    * requesterRole is used to enforce HR can only update Employees
    */
-  async updateUser(userId: string, updates: UpdateUserData, requesterRole?: UserRole): Promise<IUser> {
+  async updateUser(
+    userId: string, 
+    updates: UpdateUserData, 
+    requesterRole?: UserRole,
+    requesterUserId?: string
+  ): Promise<IUser> {
     const user = await User.findById(userId);
 
     if (!user) {
       throw new NotFoundError('User not found');
     }
 
-    // HR can only update EMPLOYEE roles
+    // HR can only update HR, SUPERVISOR, or EMPLOYEE roles (NOT Admin or Super Admin)
     if (requesterRole === UserRole.HR) {
+      const allowedRolesForHR = [UserRole.HR, UserRole.SUPERVISOR, UserRole.EMPLOYEE];
+      if (!allowedRolesForHR.includes(user.role as UserRole)) {
+        throw new ForbiddenError('HR Admin cannot update Company Admin profiles');
+      }
+    }
+
+    // Manager can only update EMPLOYEE roles in their team
+    if (requesterRole === UserRole.SUPERVISOR) {
       if (user.role !== UserRole.EMPLOYEE) {
-        throw new ForbiddenError('HR can only update Employee users');
+        throw new ForbiddenError('Managers can only update Employee profiles');
+      }
+      if (user.supervisorId?.toString() !== requesterUserId) {
+        throw new ForbiddenError('Managers can only update their own team members');
       }
     }
 
@@ -471,7 +529,7 @@ class UserService {
       }
     }
 
-    await User.findByIdAndDelete(userId);
+    await User.deleteOne({ _id: user._id });
   }
 
   /**

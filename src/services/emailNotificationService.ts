@@ -22,19 +22,21 @@ interface UserInvitationInput {
 
 class EmailNotificationService {
   private isEmailConfigured(): boolean {
-    return Boolean(config.emailService.url && config.emailService.authToken);
+    return Boolean(config.emailService.url);
   }
 
   private warnEmailSkipped(flow: string): void {
     console.warn(
-      `[EmailNotificationService] Skipping ${flow}: set EMAIL_SERVICE_URL and EMAIL_SERVICE_AUTH_TOKEN (must match email service SERVICE_AUTH_TOKEN)`
+      `[EmailNotificationService] Skipping ${flow}: set EMAIL_SERVICE_URL`
     );
   }
 
   private getHeaders(userId?: string) {
     return {
       'Content-Type': 'application/json',
-      'X-Service-Auth': config.emailService.authToken,
+      ...(config.emailService.authToken
+        ? { 'X-Service-Auth': config.emailService.authToken }
+        : {}),
       'X-Service-Name': 'trizenhr_backend',
       ...(userId ? { 'X-User-Id': userId } : {}),
     };
@@ -46,14 +48,45 @@ class EmailNotificationService {
     return now;
   }
 
-  private buildInviteLink(role: string, email: string, organizationId?: string) {
+  private resolveTenantBaseUrl(organization?: { subdomain?: string | null }): string {
     const baseUrl = config.invitation.baseUrl;
+    const subdomain = organization?.subdomain?.trim().toLowerCase();
+    if (!subdomain) {
+      return baseUrl;
+    }
+
+    try {
+      const url = new URL(baseUrl);
+      const host = url.hostname.toLowerCase();
+
+      if (host === 'localhost' || host === '127.0.0.1') {
+        return baseUrl;
+      }
+
+      const segment = config.tenantSubdomainSegment;
+      const tenantHost = segment
+        ? `${subdomain}.${segment}.${host}`
+        : `${subdomain}.${host}`;
+
+      url.hostname = tenantHost;
+      return url.toString();
+    } catch {
+      return baseUrl;
+    }
+  }
+
+  private buildInviteLink(
+    role: string,
+    email: string,
+    organization?: { _id?: string; subdomain?: string | null }
+  ) {
+    const baseUrl = this.resolveTenantBaseUrl(organization);
     const url = new URL(baseUrl);
     url.searchParams.set('role', role);
     url.searchParams.set('email', email);
 
-    if (organizationId) {
-      url.searchParams.set('organizationId', organizationId);
+    if (organization?._id) {
+      url.searchParams.set('organizationId', organization._id);
     }
 
     return url.toString();
@@ -101,7 +134,12 @@ class EmailNotificationService {
     });
 
     const inviteExpiresAt = this.getInviteExpiryDate();
-    const inviteLink = this.buildInviteLink('company_admin', input.companyAdminEmail, input.organizationId);
+    const organization = await Organization.findById(input.organizationId).select('subdomain');
+    const inviteLink = this.buildInviteLink(
+      'company_admin',
+      input.companyAdminEmail,
+      organization ? { _id: input.organizationId, subdomain: organization.subdomain } : { _id: input.organizationId }
+    );
     const createdByName = await this.getDisplayName(input.createdByUserId);
 
     try {
@@ -156,13 +194,21 @@ class EmailNotificationService {
 
     const expiresAt = this.getInviteExpiryDate();
     const mappedRole = this.mapRoleForEmailService(input.role);
-    const inviteLink = this.buildInviteLink(mappedRole, input.email, input.organizationId);
 
     let organizationName: string | undefined;
+    let organizationSubdomain: string | undefined;
     if (input.organizationId) {
-      const organization = await Organization.findById(input.organizationId).select('name');
+      const organization = await Organization.findById(input.organizationId).select('name subdomain');
       organizationName = organization?.name;
+      organizationSubdomain = organization?.subdomain;
     }
+    const inviteLink = this.buildInviteLink(
+      mappedRole,
+      input.email,
+      input.organizationId
+        ? { _id: input.organizationId, subdomain: organizationSubdomain }
+        : undefined
+    );
 
     const inviterName = await this.getDisplayName(input.invitedByUserId);
     const name = [input.firstName, input.lastName].filter(Boolean).join(' ').trim() || undefined;
@@ -194,6 +240,50 @@ class EmailNotificationService {
       const status = error?.response?.status;
       const detail = error?.response?.data;
       console.warn('Role invitation email flow failed:', error?.message || error, {
+        status,
+        detail,
+      });
+    }
+  }
+
+  async sendPasswordReset(
+    email: string,
+    name: string,
+    resetLink: string,
+    expiresAt: Date
+  ): Promise<void> {
+    if (!this.isEmailConfigured()) {
+      this.warnEmailSkipped('password-reset');
+      return;
+    }
+
+    console.info('[EmailNotificationService] Triggering password-reset email', {
+      email,
+      emailServiceUrl: config.emailService.url,
+    });
+
+    try {
+      await axios.post(
+        `${config.emailService.url}/api/v1/email/password-reset`,
+        {
+          email,
+          name,
+          resetLink,
+          expiresAt: expiresAt.toISOString(),
+          platformName: 'TrizenHR',
+        },
+        {
+          headers: this.getHeaders(),
+          timeout: 5000,
+        }
+      );
+      console.info('[EmailNotificationService] password-reset email accepted by email service', {
+        email,
+      });
+    } catch (error: any) {
+      const status = error?.response?.status;
+      const detail = error?.response?.data;
+      console.warn('Password reset email flow failed:', error?.message || error, {
         status,
         detail,
       });

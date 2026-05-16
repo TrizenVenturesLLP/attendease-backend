@@ -42,6 +42,8 @@ export interface IUser extends Document {
   // Microsoft authentication fields
   authProvider: AuthProvider;
   microsoftId?: string;
+  resetPasswordToken?: string;
+  resetPasswordExpires?: Date;
   createdAt: Date;
   updatedAt: Date;
   fullName: string;
@@ -148,6 +150,14 @@ const UserSchema = new Schema<IUser>(
       type: String,
       sparse: true,
       index: true,
+    },
+    resetPasswordToken: {
+      type: String,
+      select: false,
+    },
+    resetPasswordExpires: {
+      type: Date,
+      select: false,
     },
     platformPreferences: {
       type: PlatformPreferencesSchema,

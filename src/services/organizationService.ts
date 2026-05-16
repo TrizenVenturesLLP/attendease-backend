@@ -61,6 +61,31 @@ function normalizeSubdomainSlug(value: string | undefined): string | undefined {
   return slug || undefined;
 }
 
+function slugifyFromName(name: string): string {
+  const base = name
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .replace(/-{2,}/g, '-');
+  const sliced = base.slice(0, 50);
+  return sliced || 'org';
+}
+
+async function resolveUniqueSubdomain(baseSlug: string): Promise<string> {
+  let candidate = baseSlug;
+  let suffix = 1;
+
+  while (await Organization.exists({ subdomain: candidate })) {
+    suffix += 1;
+    const tail = `-${suffix}`;
+    const trimmedBase = baseSlug.slice(0, Math.max(0, 50 - tail.length));
+    candidate = `${trimmedBase}${tail}`;
+  }
+
+  return candidate;
+}
+
 class OrganizationService {
   /**
    * Create a new organization (Super Admin only)
@@ -82,9 +107,10 @@ class OrganizationService {
       );
     }
 
-    const subdomainSlug = normalizeSubdomainSlug(data.subdomain);
-    // Check if subdomain is already taken
-    if (subdomainSlug) {
+    let subdomainSlug = normalizeSubdomainSlug(data.subdomain);
+    if (!subdomainSlug) {
+      subdomainSlug = await resolveUniqueSubdomain(slugifyFromName(normalizedName));
+    } else {
       const existingSubdomain = await Organization.findOne({
         subdomain: subdomainSlug,
       });
