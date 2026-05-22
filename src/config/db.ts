@@ -7,11 +7,19 @@ const RETRY_DELAY_MS = 5000;
 const connectDB = async (): Promise<void> => {
   for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
     try {
+      const dbName = config.mongoDbName;
       const conn = await mongoose.connect(config.mongoUri, {
+        dbName,
         serverSelectionTimeoutMS: 10000,
         connectTimeoutMS: 10000,
       });
-      console.info(`MongoDB Connected: ${conn.connection.host}`);
+      const connectedDb = conn.connection.db?.databaseName ?? dbName;
+      console.info(`MongoDB Connected: ${conn.connection.host} (database: ${connectedDb})`);
+      if (config.nodeEnv === 'production' && connectedDb === 'test') {
+        console.warn(
+          '⚠️  Connected to database "test". Set MONGO_DB=trizenhr in server env (CapRover) so login uses seeded users.'
+        );
+      }
       return;
     } catch (error) {
       const err = error as Error;

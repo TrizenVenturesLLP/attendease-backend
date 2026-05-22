@@ -11,7 +11,7 @@
  */
 
 import mongoose from 'mongoose';
-import config from '../config';
+import config, { resolveMongoDbName } from '../config';
 import User, { UserRole, AuthProvider } from '../models/User';
 import Organization, { SubscriptionPlan } from '../models/Organization';
 
@@ -94,22 +94,7 @@ function parseArgs() {
 }
 
 function resolveDbName(): string {
-  const fromEnv = process.env.MONGO_DB?.trim();
-  if (fromEnv) {
-    return fromEnv;
-  }
-
-  try {
-    const parsed = new URL(config.mongoUri.replace('mongodb+srv://', 'https://'));
-    const pathDb = parsed.pathname.replace(/^\//, '').split('/')[0]?.trim();
-    if (pathDb) {
-      return pathDb;
-    }
-  } catch {
-    // fall through
-  }
-
-  return 'trizenhr';
+  return resolveMongoDbName(config.mongoUri);
 }
 
 async function ensureOrganization(

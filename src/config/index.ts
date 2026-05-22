@@ -11,10 +11,32 @@ interface MicrosoftConfig {
   authority: string;
 }
 
+/** Database name when MONGO_URI has no path (Atlas default is "test"). */
+export function resolveMongoDbName(mongoUri: string): string {
+  const fromEnv = process.env.MONGO_DB?.trim();
+  if (fromEnv) {
+    return fromEnv;
+  }
+
+  try {
+    const normalized = mongoUri.replace(/^mongodb\+srv:\/\//, 'https://').replace(/^mongodb:\/\//, 'http://');
+    const parsed = new URL(normalized);
+    const pathDb = parsed.pathname.replace(/^\//, '').split('/')[0]?.trim();
+    if (pathDb) {
+      return pathDb;
+    }
+  } catch {
+    // fall through
+  }
+
+  return 'trizenhr';
+}
+
 interface Config {
   port: number;
   nodeEnv: string;
   mongoUri: string;
+  mongoDbName: string;
   jwtSecret: string;
   jwtExpiresIn: string;
   corsOrigin: string | string[];
@@ -41,6 +63,7 @@ const config: Config = {
   port: parseInt(process.env.PORT || '5000', 10),
   nodeEnv: process.env.NODE_ENV || 'development',
   mongoUri: process.env.MONGO_URI!,
+  mongoDbName: resolveMongoDbName(process.env.MONGO_URI || ''),
   jwtSecret: process.env.JWT_SECRET || 'your-super-secret-jwt-key-change-in-production',
   jwtExpiresIn: process.env.JWT_EXPIRES_IN || '7d',
   corsOrigin: process.env.CORS_ORIGIN
