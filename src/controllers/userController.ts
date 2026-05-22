@@ -60,11 +60,14 @@ class UserController {
       });
 
       const user = await userService.createUser(userData, req.user.userId);
+      const inviteRole = (userData.role || user.role) as UserRole;
 
       logger.info('User created, triggering invitation email', {
         userId: user._id,
         email: user.email,
-        role: user.role,
+        requestedRole: userData.role,
+        savedRole: user.role,
+        inviteRole,
         organizationId: user.organizationId?.toString(),
         createdBy: req.user.userId,
       });
@@ -75,7 +78,7 @@ class UserController {
       try {
         await emailNotificationService.sendRoleInvitation({
           email: user.email,
-          role: user.role as UserRole,
+          role: inviteRole,
           organizationId:
             user.organizationId?.toString() ||
             userData.organizationId ||

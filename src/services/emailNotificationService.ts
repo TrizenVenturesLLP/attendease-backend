@@ -113,21 +113,42 @@ class EmailNotificationService {
     return inviteLink;
   }
 
+  /** Map app roles to email-service role slugs (handles string values from API/DB). */
   private mapRoleForEmailService(
-    role: UserRole
+    role: UserRole | string
   ): 'company_admin' | 'hr_admin' | 'manager' | 'employee' {
-    if (role === UserRole.ADMIN) {
+    const normalized = String(role).trim().toLowerCase().replace(/\s+/g, '_');
+
+    if (
+      normalized === UserRole.ADMIN ||
+      normalized === 'admin' ||
+      normalized === 'company_admin' ||
+      normalized === 'companyadmin'
+    ) {
       return 'company_admin';
     }
 
-    if (role === UserRole.HR) {
+    if (normalized === UserRole.HR || normalized === 'hr' || normalized === 'hr_admin') {
       return 'hr_admin';
     }
 
-    if (role === UserRole.SUPERVISOR) {
+    if (
+      normalized === UserRole.SUPERVISOR ||
+      normalized === 'supervisor' ||
+      normalized === 'manager'
+    ) {
       return 'manager';
     }
 
+    if (normalized === UserRole.EMPLOYEE || normalized === 'employee') {
+      return 'employee';
+    }
+
+    if (normalized === UserRole.SUPER_ADMIN || normalized === 'super_admin') {
+      return 'company_admin';
+    }
+
+    logger.warn('Unknown role for invitation email, defaulting to employee', { role });
     return 'employee';
   }
 
@@ -196,6 +217,7 @@ class EmailNotificationService {
           createdByName,
           platformName: 'TrizenHR',
           platformSupportEmail: config.emailService.platformSupportEmail,
+          companyAdminRole: 'company_admin',
         },
         {
           headers: this.getHeaders(input.createdByUserId),
