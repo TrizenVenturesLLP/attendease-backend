@@ -65,6 +65,17 @@ router.get(
 );
 
 /**
+ * @route   GET /api/users/next-employee-id
+ * @desc    Suggest next employee ID for an organization
+ * @access  Private (Super Admin/Admin/HR)
+ */
+router.get(
+  '/next-employee-id',
+  authorize(UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.HR),
+  userController.getNextEmployeeId
+);
+
+/**
  * @route   GET /api/users/:id
  * @desc    Get user by ID
  * @access  Private (All authenticated users)
@@ -102,6 +113,17 @@ router.patch(
   '/:id/supervisor',
   authorize(UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.HR),
   userController.assignSupervisor
+);
+
+/**
+ * @route   POST /api/users/:id/resend-invitation
+ * @desc    Resend invitation email
+ * @access  Private (Super Admin/Admin)
+ */
+router.post(
+  '/:id/resend-invitation',
+  authorize(UserRole.SUPER_ADMIN, UserRole.ADMIN),
+  userController.resendInvitation
 );
 
 /**

@@ -4,6 +4,18 @@ import helmet from 'helmet';
 import config from './config';
 import routes from './routes';
 import { errorHandler, notFoundHandler } from './middleware/errorHandler';
+import { requestLogger } from './middleware/requestLogger';
+
+/** Tenant dev URLs: http://acme.localhost:3000 (see frontend host.ts) */
+function isTenantLocalhostOrigin(origin: string): boolean {
+  try {
+    const { hostname, protocol } = new URL(origin);
+    if (protocol !== 'http:' && protocol !== 'https:') return false;
+    return hostname === 'localhost' || hostname.endsWith('.localhost');
+  } catch {
+    return false;
+  }
+}
 
 const createApp = (): Application => {
   const app = express();
@@ -24,10 +36,11 @@ const createApp = (): Application => {
 
         // Normalize origins by removing trailing slashes for comparison
         const normalizedOrigin = origin.replace(/\/$/, '');
-        const isAllowed = allowedOrigins.some(allowed => {
-          const normalizedAllowed = allowed.replace(/\/$/, '');
-          return normalizedAllowed === normalizedOrigin;
-        });
+        const isAllowed =
+          allowedOrigins.some((allowed) => {
+            const normalizedAllowed = allowed.replace(/\/$/, '');
+            return normalizedAllowed === normalizedOrigin;
+          }) || isTenantLocalhostOrigin(normalizedOrigin);
 
         if (isAllowed) {
           callback(null, true);
@@ -47,6 +60,8 @@ const createApp = (): Application => {
   // Body parsing middleware
   app.use(express.json({ limit: '10mb' }));
   app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+
+  app.use('/api', requestLogger);
 
   // API routes
   app.use('/api', routes);

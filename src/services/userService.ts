@@ -13,11 +13,14 @@ import {
   ConflictError,
 } from '../utils/AppError';
 import mongoose from 'mongoose';
+import crypto from 'crypto';
+import { deleteUsersAndRelatedData } from './userCascadeDelete';
 
 export interface CreateUserData {
   organizationId?: string; // Optional for Super Admin (platform-level), required for others
   email: string;
-  password: string;
+  /** Omitted when inviting — a random password is set until accept-invitation */
+  password?: string;
   firstName: string;
   lastName: string;
   role: UserRole;
@@ -91,10 +94,14 @@ class UserService {
         throw new ConflictError('Super Admin with this email already exists');
       }
 
+      if (!userData.password?.trim()) {
+        throw new BadRequestError('Password is required when creating a Super Admin');
+      }
+
       // Create Super Admin (no organization-related validations needed)
       const superAdmin = new User({
         email: userData.email,
-        password: userData.password,
+        password: userData.password.trim(),
         firstName: userData.firstName,
         lastName: userData.lastName,
         role: UserRole.SUPER_ADMIN,
@@ -144,9 +151,14 @@ class UserService {
       }
     }
 
-    // Create user
+    // Invite flow: no password in request — user sets it via email link
+    const password =
+      userData.password?.trim() ||
+      crypto.randomBytes(32).toString('hex');
+
     const user = new User({
       ...userData,
+      password,
       createdBy: createdByUserId,
     });
 
@@ -365,22 +377,73 @@ class UserService {
   }
 
   /**
-   * Delete user (soft delete by setting isActive to false)
+   * Permanently delete user and related records (frees email for re-invite).
    */
-  async deleteUser(userId: string): Promise<void> {
+  async deleteUser(userId: string, organizationId?: string): Promise<void> {
     const user = await User.findById(userId);
 
     if (!user) {
       throw new NotFoundError('User not found');
     }
 
-    // Prevent deleting super admin
     if (user.role === UserRole.SUPER_ADMIN) {
       throw new ForbiddenError('Cannot delete super admin');
     }
 
-    user.isActive = false;
-    await user.save();
+    if (
+      organizationId &&
+      user.organizationId?.toString() !== organizationId
+    ) {
+      throw new ForbiddenError('User does not belong to your organization');
+    }
+
+    const deleted = await deleteUsersAndRelatedData([user._id]);
+    if (deleted === 0) {
+      throw new NotFoundError('User not found');
+    }
+  }
+
+  /**
+   * Suggest the next employee ID for an organization (e.g. EMP006).
+   */
+  async getNextEmployeeId(
+    organizationId: string
+  ): Promise<{ nextEmployeeId: string; existingSample: string[] }> {
+    if (!organizationId) {
+      throw new BadRequestError('Organization ID is required');
+    }
+
+    const users = await User.find({
+      organizationId,
+      employeeId: { $exists: true, $nin: [null, ''] },
+    })
+      .select('employeeId')
+      .limit(500);
+
+    const existing = users
+      .map((u) => u.employeeId)
+      .filter((id): id is string => Boolean(id));
+
+    let maxNum = 0;
+    for (const id of existing) {
+      const empMatch = id.match(/^EMP(\d+)$/i);
+      const digitMatch = id.match(/^(\d+)$/);
+      const num = empMatch
+        ? parseInt(empMatch[1], 10)
+        : digitMatch
+          ? parseInt(digitMatch[1], 10)
+          : 0;
+      if (num > maxNum) {
+        maxNum = num;
+      }
+    }
+
+    const nextEmployeeId = `EMP${String(maxNum + 1).padStart(3, '0')}`;
+
+    return {
+      nextEmployeeId,
+      existingSample: existing.slice(0, 8),
+    };
   }
 
   /**

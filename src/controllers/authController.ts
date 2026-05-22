@@ -112,6 +112,29 @@ class AuthController {
   }
 
   /**
+   * @route   POST /api/auth/accept-invitation
+   * @desc    Set password from email invitation link
+   * @access  Public
+   */
+  async acceptInvitation(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const { email, organizationId, password } = req.body;
+
+      await authService.acceptInvitation(email, organizationId, password);
+
+      const response: ApiResponse = {
+        success: true,
+        message: 'Password set successfully. You can now log in.',
+        timestamp: new Date().toISOString(),
+      };
+
+      res.status(200).json(response);
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  /**
    * @route   POST /api/auth/change-password
    * @desc    Change user password
    * @access  Private
