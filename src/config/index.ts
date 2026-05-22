@@ -70,7 +70,13 @@ const config: Config = {
     ? process.env.CORS_ORIGIN.split(',').map(origin => origin.trim())
     : ['http://localhost:3000'],
   frontendUrl: process.env.FRONTEND_URL || 'http://localhost:3000',
-  tenantSubdomainSegment: (process.env.TENANT_SUBDOMAIN_SEGMENT || '').trim().toLowerCase(),
+  tenantSubdomainSegment: (
+    process.env.TENANT_SUBDOMAIN_SEGMENT ||
+    process.env.TENANT_SUBDOMAIN ||
+    ''
+  )
+    .trim()
+    .toLowerCase(),
   emailService: {
     url: process.env.EMAIL_SERVICE_URL || 'http://localhost:4007',
     authToken: process.env.EMAIL_SERVICE_AUTH_TOKEN || '',
@@ -101,7 +107,13 @@ const config: Config = {
         process.env.INVITATION_BASE_URL || `${frontendUrl.replace(/\/$/, '')}/auth/set-password`,
       expiryDays: parseInt(process.env.INVITATION_EXPIRY_DAYS || '7', 10),
       appDomain,
-      tenantSubdomain: (process.env.TENANT_SUBDOMAIN || 'org').trim().toLowerCase(),
+      tenantSubdomain: (
+        process.env.TENANT_SUBDOMAIN ||
+        process.env.TENANT_SUBDOMAIN_SEGMENT ||
+        ''
+      )
+        .trim()
+        .toLowerCase(),
       frontendPort: process.env.FRONTEND_PORT || '3000',
       frontendProtocol,
     };
