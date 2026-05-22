@@ -10,9 +10,6 @@ const router = Router();
  * @access  Public
  */
 router.post('/login', authController.login);
-router.post('/accept-invitation', authController.acceptInvitation);
-router.post('/forgot-password', authController.forgotPassword);
-router.post('/reset-password', authController.resetPassword);
 
 /**
  * @route   POST /api/auth/accept-invitation
@@ -20,6 +17,9 @@ router.post('/reset-password', authController.resetPassword);
  * @access  Public
  */
 router.post('/accept-invitation', authController.acceptInvitation);
+
+router.post('/forgot-password', authController.forgotPassword);
+router.post('/reset-password', authController.resetPassword);
 
 /**
  * @route   GET /api/auth/microsoft/url
