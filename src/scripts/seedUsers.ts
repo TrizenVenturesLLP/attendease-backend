@@ -27,7 +27,7 @@ interface SeedUserSpec {
   department?: string;
   employeeId?: string;
   orgScoped: boolean;
-}
+} 
 
 const DEMO_USERS: SeedUserSpec[] = [
   {
