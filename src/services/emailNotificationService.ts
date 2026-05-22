@@ -195,7 +195,7 @@ class EmailNotificationService {
           inviteExpiresAt: inviteExpiresAt.toISOString(),
           createdByName,
           platformName: 'TrizenHR',
-          supportEmail: config.emailService.supportEmail,
+          platformSupportEmail: config.emailService.platformSupportEmail,
         },
         {
           headers: this.getHeaders(input.createdByUserId),

@@ -46,7 +46,10 @@ interface Config {
   emailService: {
     url: string;
     authToken: string;
+    /** Shown in staff invite footers / org-facing copy */
     supportEmail: string;
+    /** Organization onboarding & company-admin invites (From: support@trizenhr.com) */
+    platformSupportEmail: string;
   };
   invitation: {
     baseUrl: string;
@@ -81,6 +84,8 @@ const config: Config = {
     url: process.env.EMAIL_SERVICE_URL || 'http://localhost:4007',
     authToken: process.env.EMAIL_SERVICE_AUTH_TOKEN || '',
     supportEmail: process.env.TRIZEN_SUPPORT_EMAIL || 'support@trizenventures.com',
+    platformSupportEmail:
+      process.env.TRIZEN_PLATFORM_SUPPORT_EMAIL || 'support@trizenhr.com',
   },
   invitation: (() => {
     const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
