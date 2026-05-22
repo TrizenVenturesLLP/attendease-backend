@@ -5,44 +5,50 @@ import config from './config';
 import routes from './routes';
 import { errorHandler, notFoundHandler } from './middleware/errorHandler';
 import { subdomainContext } from './middleware/subdomainContext';
+import { requestLogger } from './middleware/requestLogger';
+
+/** Tenant dev URLs: http://acme.localhost:3000 (see frontend host.ts) */
+function isTenantLocalhostOrigin(origin: string): boolean {
+  try {
+    const { hostname, protocol } = new URL(origin);
+    if (protocol !== 'http:' && protocol !== 'https:') return false;
+    return hostname === 'localhost' || hostname.endsWith('.localhost');
+  } catch {
+    return false;
+  }
+}
 
 const createApp = (): Application => {
   const app = express();
 
-  // Security middleware
   app.use(helmet());
 
-  // CORS configuration
   app.use(
     cors({
       origin: (origin, callback) => {
-        // Allow requests with no origin (like mobile apps, curl, postman)
         if (!origin) return callback(null, true);
 
-        const allowedOrigins = Array.isArray(config.corsOrigin) 
-          ? config.corsOrigin 
+        const allowedOrigins = Array.isArray(config.corsOrigin)
+          ? config.corsOrigin
           : [config.corsOrigin];
 
-        // Normalize origins by removing trailing slashes for comparison
         const normalizedOrigin = origin.replace(/\/$/, '');
 
-        // Try to parse the origin to extract hostname
         let originHost: string | null = null;
         try {
           const url = new URL(normalizedOrigin);
           originHost = url.hostname.toLowerCase();
         } catch {
-          // If parsing fails, fall back to exact string comparison only
+          // fall back to exact match only
         }
 
-        // Explicit allow-list check (existing behavior)
         const isAllowedExplicit = allowedOrigins.some((allowed) => {
           const normalizedAllowed = allowed.replace(/\/$/, '');
           return normalizedAllowed === normalizedOrigin;
         });
 
-        // Allow any subdomain of configured frontend root domains (e.g. *.trizenhr.in, *.lvh.me)
-        // Supports comma-separated FRONTEND_URL values for local + deployed environments.
+        const isAllowedTenantLocalhost = isTenantLocalhostOrigin(normalizedOrigin);
+
         let isAllowedByRootDomain = false;
         if (originHost) {
           const frontendCandidates = String(config.frontendUrl)
@@ -65,8 +71,6 @@ const createApp = (): Application => {
           });
         }
 
-        // Local subdomain testing convenience in non-production:
-        // allow *.lvh.me (e.g. google.org.lvh.me:3000) and lvh.me root.
         const isAllowedLocalDevHost =
           config.nodeEnv !== 'production' &&
           Boolean(
@@ -74,7 +78,12 @@ const createApp = (): Application => {
               (originHost === 'lvh.me' || originHost.endsWith('.lvh.me'))
           );
 
-        if (isAllowedExplicit || isAllowedByRootDomain || isAllowedLocalDevHost) {
+        if (
+          isAllowedExplicit ||
+          isAllowedTenantLocalhost ||
+          isAllowedByRootDomain ||
+          isAllowedLocalDevHost
+        ) {
           callback(null, true);
         } else {
           console.warn(`CORS blocked origin: ${origin}`);
@@ -85,21 +94,17 @@ const createApp = (): Application => {
       methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
       allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept'],
       exposedHeaders: ['Content-Range', 'X-Content-Range'],
-      maxAge: 86400, // 24 hours
+      maxAge: 86400,
     })
   );
 
-  // Body parsing middleware
   app.use(express.json({ limit: '10mb' }));
   app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
-  // Subdomain / tenant resolution - MUST run before API routes and auth
   app.use(subdomainContext);
-
-  // API routes
+  app.use('/api', requestLogger);
   app.use('/api', routes);
 
-  // Error handling
   app.use(notFoundHandler);
   app.use(errorHandler);
 

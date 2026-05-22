@@ -6,6 +6,7 @@
 // 4. Supervisor validation checks same organization
 
 import crypto from 'crypto';
+import mongoose from 'mongoose';
 import User, { IUser, UserRole } from '../models/User';
 import {
   BadRequestError,
@@ -13,11 +14,12 @@ import {
   ForbiddenError,
   ConflictError,
 } from '../utils/AppError';
-import mongoose from 'mongoose';
+import { deleteUsersAndRelatedData } from './userCascadeDelete';
 
 export interface CreateUserData {
   organizationId?: string; // Optional for Super Admin (platform-level), required for others
   email: string;
+  /** Omitted when inviting — a random password is set until accept-invitation */
   password?: string;
   firstName: string;
   lastName: string;
@@ -161,10 +163,14 @@ class UserService {
         throw new ConflictError('Super Admin with this email already exists');
       }
 
+      if (!userData.password?.trim()) {
+        throw new BadRequestError('Password is required when creating a Super Admin');
+      }
+
       // Create Super Admin (no organization-related validations needed)
       const superAdmin = new User({
         email: userData.email,
-        password: userData.password,
+        password: userData.password.trim(),
         firstName: userData.firstName,
         lastName: userData.lastName,
         role: UserRole.SUPER_ADMIN,
@@ -230,9 +236,14 @@ class UserService {
       }
     }
 
-    // Create user
+    // Invite flow: no password in request — user sets it via email link
+    const password =
+      userData.password?.trim() ||
+      crypto.randomBytes(32).toString('hex');
+
     const user = new User({
       ...userData,
+      password,
       createdBy: createdByUserId,
     });
 
@@ -526,28 +537,39 @@ class UserService {
   }
 
   /**
-   * Delete user — permanently removes from the database.
+   * Permanently delete user and related records (frees email for re-invite).
    */
-  async deleteUser(userId: string, requesterUserId: string, requesterRole?: UserRole): Promise<void> {
+  async deleteUser(
+    userId: string,
+    requesterUserId: string,
+    requesterRole?: UserRole,
+    organizationId?: string
+  ): Promise<void> {
     const user = await User.findById(userId);
 
     if (!user) {
       throw new NotFoundError('User not found');
     }
 
-    // Prevent self-deletion
     if (user._id.toString() === requesterUserId.toString()) {
       throw new ForbiddenError('You cannot delete your own account');
     }
 
-    // Only Super Admin can delete Super Admin users
-    if (user.role === UserRole.SUPER_ADMIN) {
-      if (requesterRole !== UserRole.SUPER_ADMIN) {
-        throw new ForbiddenError('Only Super Admin can delete System Admin users');
-      }
+    if (user.role === UserRole.SUPER_ADMIN && requesterRole !== UserRole.SUPER_ADMIN) {
+      throw new ForbiddenError('Only Super Admin can delete System Admin users');
     }
 
-    await User.deleteOne({ _id: user._id });
+    if (
+      organizationId &&
+      user.organizationId?.toString() !== organizationId
+    ) {
+      throw new ForbiddenError('User does not belong to your organization');
+    }
+
+    const deleted = await deleteUsersAndRelatedData([user._id]);
+    if (deleted === 0) {
+      throw new NotFoundError('User not found');
+    }
   }
 
   /**

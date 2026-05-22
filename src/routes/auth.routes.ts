@@ -15,6 +15,13 @@ router.post('/forgot-password', authController.forgotPassword);
 router.post('/reset-password', authController.resetPassword);
 
 /**
+ * @route   POST /api/auth/accept-invitation
+ * @desc    Complete invite by setting password
+ * @access  Public
+ */
+router.post('/accept-invitation', authController.acceptInvitation);
+
+/**
  * @route   GET /api/auth/microsoft/url
  * @desc    Get Microsoft OAuth authorization URL
  * @access  Public

@@ -11,6 +11,7 @@
     "seed:holidays": "ts-node src/scripts/seedHolidays.ts",
     "seed:departments": "ts-node src/scripts/seedDepartments.ts",
     "migrate:multitenant": "ts-node src/scripts/migrateToMultiTenant.ts",
+    "reset:test-users": "ts-node src/scripts/resetTestUsers.ts",
     "lint": "eslint src --ext .ts",
     "lint:fix": "eslint src --ext .ts --fix",
     "format": "prettier --write \"src/**/*.ts\"",

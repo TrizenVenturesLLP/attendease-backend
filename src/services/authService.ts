@@ -1,6 +1,8 @@
 import jwt from 'jsonwebtoken';
+import mongoose from 'mongoose';
 import config from '../config';
 import User, { IUser, AuthProvider, UserRole } from '../models/User';
+import Organization from '../models/Organization';
 import microsoftAuthService from './microsoftAuthService';
 import emailNotificationService from './emailNotificationService';
 import crypto from 'crypto';
@@ -12,25 +14,30 @@ import {
 } from '../utils/AppError';
 import { JwtPayload } from '../utils/ApiResponse';
 
+export interface ClientUser {
+  id: string;
+  _id: string;
+  organizationId?: string;
+  organization?: {
+    _id: string;
+    name: string;
+    subscriptionPlan: string;
+    subdomain?: string;
+  };
+  email: string;
+  firstName: string;
+  lastName: string;
+  fullName: string;
+  role: string;
+  department?: string;
+  employeeId?: string;
+  authProvider?: string;
+  isActive?: boolean;
+}
+
 export interface LoginResult {
   token: string;
-  user: {
-    id: string;
-    organizationId?: string;
-    organization?: {
-      _id: string;
-      name: string;
-      subscriptionPlan: string;
-    };
-    email: string;
-    firstName: string;
-    lastName: string;
-    fullName: string;
-    role: string;
-    department?: string;
-    employeeId?: string;
-    authProvider?: string;
-  };
+  user: ClientUser;
 }
 
 class AuthService {
@@ -84,16 +91,8 @@ class AuthService {
       throw new UnauthorizedError('Invalid email or password');
     }
 
-    // Hydrate organization for non-Super Admin responses so UI can show org name immediately.
-    if (user.role !== UserRole.SUPER_ADMIN && user.organizationId) {
-      await user.populate('organizationId', 'name subscriptionPlan');
-    }
-
-    // Generate JWT token
     const token = this.generateToken(user);
-
-    // Return user data without password
-    return this.createLoginResult(token, user);
+    return await this.createLoginResult(token, user);
   }
 
   /**
@@ -146,7 +145,7 @@ class AuthService {
     // Generate JWT token
     const token = this.generateToken(user);
 
-    return this.createLoginResult(token, user);
+    return await this.createLoginResult(token, user);
   }
 
   /**
@@ -199,40 +198,52 @@ class AuthService {
     } as jwt.SignOptions);
   }
 
-  /**
-   * Create standardized login result
-   */
-  private createLoginResult(token: string, user: IUser): LoginResult {
-    const populatedOrg =
-      user.organizationId &&
-      typeof user.organizationId === 'object' &&
-      'name' in (user.organizationId as any)
-        ? (user.organizationId as any)
-        : null;
+  private async formatClientUser(user: IUser | Record<string, unknown>): Promise<ClientUser> {
+    const id = String((user as IUser)._id);
+    const organizationId = (user as IUser).organizationId?.toString();
+    const role = (user as IUser).role;
 
+    const firstName = (user as IUser).firstName || '';
+    const lastName = (user as IUser).lastName || '';
+    const fullName =
+      (user as IUser).fullName || `${firstName} ${lastName}`.trim() || (user as IUser).email;
+
+    const clientUser: ClientUser = {
+      id,
+      _id: id,
+      organizationId,
+      email: (user as IUser).email,
+      firstName,
+      lastName,
+      fullName,
+      role,
+      department: (user as IUser).department,
+      employeeId: (user as IUser).employeeId,
+      authProvider: (user as IUser).authProvider,
+      isActive: (user as IUser).isActive,
+    };
+
+    if (organizationId && role !== UserRole.SUPER_ADMIN) {
+      const org = await Organization.findById(organizationId)
+        .select('name subscriptionPlan subdomain')
+        .lean();
+      if (org) {
+        clientUser.organization = {
+          _id: org._id.toString(),
+          name: org.name,
+          subscriptionPlan: org.subscriptionPlan,
+          subdomain: org.subdomain,
+        };
+      }
+    }
+
+    return clientUser;
+  }
+
+  private async createLoginResult(token: string, user: IUser): Promise<LoginResult> {
     return {
       token,
-      user: {
-        id: user._id.toString(),
-        organizationId: populatedOrg
-          ? populatedOrg._id?.toString?.() || String(populatedOrg._id)
-          : user.organizationId?.toString(),
-        organization: populatedOrg
-          ? {
-              _id: populatedOrg._id?.toString?.() || String(populatedOrg._id),
-              name: populatedOrg.name,
-              subscriptionPlan: populatedOrg.subscriptionPlan,
-            }
-          : undefined,
-        email: user.email,
-        firstName: user.firstName,
-        lastName: user.lastName,
-        fullName: user.fullName,
-        role: user.role,
-        department: user.department,
-        employeeId: user.employeeId,
-        authProvider: user.authProvider,
-      },
+      user: await this.formatClientUser(user),
     };
   }
 
@@ -248,6 +259,51 @@ class AuthService {
       }
       throw new UnauthorizedError('Invalid token');
     }
+  }
+
+  /**
+   * Accept invitation — set password for a pre-created org user
+   */
+  async acceptInvitation(
+    email: string,
+    organizationId: string,
+    password: string
+  ): Promise<void> {
+    if (!email || !organizationId || !password) {
+      throw new BadRequestError('Email, organization ID, and password are required');
+    }
+
+    if (password.length < 6) {
+      throw new BadRequestError('Password must be at least 6 characters');
+    }
+
+    if (!mongoose.Types.ObjectId.isValid(organizationId)) {
+      throw new BadRequestError('Invalid organization ID');
+    }
+
+    const normalizedEmail = email.trim().toLowerCase();
+
+    const user = await User.findOne({
+      email: normalizedEmail,
+      organizationId,
+    }).select('+password');
+
+    if (!user) {
+      throw new NotFoundError(
+        'Invitation not found. Ask your administrator to send a new invite.'
+      );
+    }
+
+    if (user.role === UserRole.SUPER_ADMIN) {
+      throw new BadRequestError('Invalid invitation');
+    }
+
+    if (!user.isActive) {
+      throw new BadRequestError('This account has been deactivated. Contact your administrator.');
+    }
+
+    user.password = password;
+    await user.save();
   }
 
   /**
@@ -293,35 +349,16 @@ class AuthService {
   /**
    * Get current user info
    */
-  async getCurrentUser(userId: string): Promise<any> {
+  async getCurrentUser(userId: string): Promise<ClientUser> {
     const user = await User.findById(userId)
       .populate('supervisorId', 'firstName lastName email')
-      .populate('organizationId', 'name subscriptionPlan')
       .lean();
 
     if (!user) {
       throw new NotFoundError('User not found');
     }
 
-    const response: any = { ...user };
-    const populatedOrg =
-      user.organizationId &&
-      typeof user.organizationId === 'object' &&
-      'name' in (user.organizationId as any)
-        ? (user.organizationId as any)
-        : null;
-
-    if (populatedOrg) {
-      response.organization = {
-        _id: populatedOrg._id?.toString?.() || String(populatedOrg._id),
-        name: populatedOrg.name,
-        subscriptionPlan: populatedOrg.subscriptionPlan,
-      };
-      response.organizationId =
-        populatedOrg._id?.toString?.() || String(populatedOrg._id);
-    }
-
-    return response;
+    return this.formatClientUser(user as unknown as IUser);
   }
 
   /**
@@ -361,34 +398,6 @@ class AuthService {
     await user.save();
 
     return this.getCurrentUser(userId);
-  }
-
-  /**
-   * Accept an invitation and set password
-   */
-  async acceptInvitation(
-    email: string,
-    organizationId: string,
-    password: string
-  ): Promise<void> {
-    if (!email || !organizationId || !password) {
-      throw new BadRequestError('Email, organizationId, and password are required');
-    }
-
-    // Find the user by email AND organizationId for security
-    const user = await User.findOne({ 
-      email: email.toLowerCase(), 
-      organizationId,
-      isActive: true 
-    });
-
-    if (!user) {
-      throw new NotFoundError('Invalid invitation or user not found');
-    }
-
-    // Update password
-    user.password = password;
-    await user.save();
   }
 
   /**
