@@ -284,7 +284,10 @@ class UserController {
         throw new BadRequestError('Organization ID is required');
       }
 
-      const result = await userService.getNextEmployeeId(organizationId);
+      const role = (req.query.role as string | undefined) as UserRole | undefined;
+      const department = req.query.department as string | undefined;
+
+      const result = await userService.getNextEmployeeId(organizationId, role, department);
 
       const response: ApiResponse<typeof result> = {
         success: true,

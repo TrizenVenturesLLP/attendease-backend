@@ -8,6 +8,8 @@
 import crypto from 'crypto';
 import mongoose from 'mongoose';
 import User, { IUser, UserRole } from '../models/User';
+import Organization from '../models/Organization';
+import Department from '../models/Department';
 import {
   BadRequestError,
   NotFoundError,
@@ -46,60 +48,129 @@ export interface UserFilters {
 }
 
 class UserService {
-  private normalizeEmployeeId(input?: string): string | undefined {
-    if (!input) return undefined;
-    const trimmed = String(input).trim();
-    if (!trimmed) return undefined;
-
-    // Accept either digits (e.g. "6") or full code (e.g. "EMP006")
-    const digitsOnly = trimmed.match(/^\d+$/);
-    const empCode = trimmed.match(/^EMP(\d+)$/i);
-
-    const numericPart = digitsOnly?.[0] ?? empCode?.[1];
-    if (!numericPart) {
-      return undefined;
+  /**
+   * Build a 2-char uppercase prefix from a name string (used for dept/role segment).
+   * e.g. "Engineering" → "EN", "Human Resources" → "HR"
+   */
+  private buildPrefix(name: string): string {
+    const clean = name.trim().toUpperCase().replace(/[^A-Z0-9\s]/g, '');
+    const words = clean.split(/\s+/).filter(Boolean);
+    if (words.length >= 2) {
+      return words.map(w => w[0]).join('').slice(0, 2).padEnd(2, 'X');
     }
-
-    const num = parseInt(numericPart, 10);
-    if (!Number.isFinite(num) || num <= 0) {
-      return undefined;
-    }
-
-    return `EMP${String(num).padStart(3, '0')}`;
+    return ((words[0] || 'XX').slice(0, 2)).padEnd(2, 'X');
   }
 
-  async getNextEmployeeId(organizationId: string): Promise<{ nextEmployeeId: string; existingSample: string[] }> {
-    const orgObjectId = new mongoose.Types.ObjectId(organizationId);
+  /**
+   * Map a UserRole to a 2-char role code.
+   */
+  private rolePrefix(role: UserRole): string {
+    const map: Record<UserRole, string> = {
+      [UserRole.SUPER_ADMIN]: 'SA',
+      [UserRole.ADMIN]: 'AD',
+      [UserRole.HR]: 'HR',
+      [UserRole.SUPERVISOR]: 'MG',
+      [UserRole.EMPLOYEE]: 'EM',
+    };
+    return map[role] ?? 'US';
+  }
 
-    const agg = await User.aggregate([
-      {
-        $match: {
-          organizationId: orgObjectId,
-          employeeId: { $regex: /^EMP\d+$/ },
-        },
-      },
-      {
-        $project: {
-          employeeId: 1,
-          num: {
-            $toInt: {
-              $substrBytes: [
-                '$employeeId',
-                3,
-                { $subtract: [{ $strLenBytes: '$employeeId' }, 3] },
-              ],
-            },
-          },
-        },
-      },
-      { $group: { _id: null, maxNum: { $max: '$num' } } },
-    ]);
+  /**
+   * Generate the next Employee ID — always exactly 8 characters.
+   *
+   * Format: {ORGCODE3}{ROLE2}{SEQ3}
+   *   e.g. TRZ + AD + 001 = TRZAD001  (Company Admin)
+   *        TRZ + HR + 001 = TRZHR001  (HR Admin)
+   *        TRZ + MG + 001 = TRZMG001  (Manager)
+   *        TRZ + EM + 001 = TRZEM001  (Employee)
+   *
+   * ORGCODE3 = unique 3-char code stored on the Organization (e.g. TRZ, ACM).
+   * ROLE2    = 2-char role code.
+   * SEQ3     = 3-digit sequence 001–999, scoped to same prefix within the org.
+   */
+  /**
+   * Generate the next Employee ID.
+   *
+   * Format:
+   *   Company Admin  → {ORGCODE3}{ROLE2}{SEQ3}          = 8 chars  e.g. TRZAD001
+   *   HR/Mgr/Employee→ {ORGCODE3}{DEPT2}{ROLE2}{SEQ3}   = 10 chars e.g. TRZENЕМ001
+   *
+   * ORGCODE3 = unique 3-char code stored on the Organization (e.g. TRZ).
+   * DEPT2    = first 2 chars of department name (non-admin only).
+   * ROLE2    = 2-char role code (AD / HR / MG / EM).
+   * SEQ3     = 3-digit sequence 001–999, scoped to same prefix within the org.
+   */
+  async generateEmployeeId(
+    organizationId: string,
+    role: UserRole,
+    departmentName?: string
+  ): Promise<string> {
+    const org = await Organization.findById(organizationId).select('orgCode').lean();
+    if (!org) throw new NotFoundError('Organization not found');
 
-    const maxNum = agg?.[0]?.maxNum ?? 0;
-    const nextNum = maxNum + 1;
-    const nextEmployeeId = `EMP${String(nextNum).padStart(3, '0')}`;
+    const orgCode = (org as any).orgCode || organizationId.slice(-3).toUpperCase();
+    const rolePfx = this.rolePrefix(role);                  // 2 chars
 
-    const existingSampleDocs = await User.find({ organizationId, employeeId: { $regex: /^EMP\d+$/ } })
+    let idPrefix: string;
+    if (role === UserRole.ADMIN) {
+      // Company Admin: no department → ORGCODE + ROLE
+      idPrefix = `${orgCode}${rolePfx}`;                    // 5 chars e.g. TRZAD
+    } else {
+      if (!departmentName) {
+        throw new BadRequestError(
+          'Department is required for non-admin users. Please create departments first.'
+        );
+      }
+      const deptPfx = this.buildPrefix(departmentName);     // 2 chars e.g. EN
+      // ORGCODE + DEPT + ROLE
+      idPrefix = `${orgCode}${deptPfx}${rolePfx}`;          // 7 chars e.g. TRZENЕМ
+    }
+
+    // Count existing IDs with this exact prefix + 3-digit seq
+    const count = await User.countDocuments({
+      organizationId: new mongoose.Types.ObjectId(organizationId),
+      employeeId: { $regex: `^${idPrefix}\\d{3}$` },
+    });
+
+    const seq = String(count + 1).padStart(3, '0');
+    return `${idPrefix}${seq}`;
+  }
+
+  /**
+   * Preview the next Employee ID (used by the frontend suggestion endpoint).
+   * Returns the generated ID and a sample of existing IDs with the same prefix.
+   */
+  async getNextEmployeeId(
+    organizationId: string,
+    role?: UserRole,
+    departmentName?: string
+  ): Promise<{ nextEmployeeId: string; existingSample: string[] }> {
+    const effectiveRole = role ?? UserRole.EMPLOYEE;
+
+    // For non-admin roles, department is part of the ID — need it to generate preview
+    if (effectiveRole !== UserRole.ADMIN && !departmentName) {
+      return { nextEmployeeId: '', existingSample: [] };
+    }
+
+    const nextEmployeeId = await this.generateEmployeeId(
+      organizationId,
+      effectiveRole,
+      departmentName
+    );
+
+    // Derive the prefix to fetch existing samples
+    const org = await Organization.findById(organizationId).select('orgCode').lean();
+    const orgCode = (org as any)?.orgCode || organizationId.slice(-3).toUpperCase();
+    const rolePfx = this.rolePrefix(effectiveRole);
+
+    const idPrefix = effectiveRole === UserRole.ADMIN
+      ? `${orgCode}${rolePfx}`                              // 5 chars e.g. TRZAD
+      : `${orgCode}${this.buildPrefix(departmentName!)}${rolePfx}`; // 7 chars e.g. TRZENЕМ
+
+    const existingSampleDocs = await User.find({
+      organizationId,
+      employeeId: { $regex: `^${idPrefix}\\d{3}$` },
+    })
       .select('employeeId')
       .sort({ createdAt: -1 })
       .limit(5)
@@ -190,18 +261,40 @@ class UserService {
       userData.password = crypto.randomBytes(12).toString('hex');
     }
 
-    // Auto-generate / normalize employeeId for org-scoped users (skip for Company Admin)
-    if (!userData.employeeId) {
-      if (userData.role !== UserRole.ADMIN) {
-        const { nextEmployeeId } = await this.getNextEmployeeId(userData.organizationId);
-        userData.employeeId = nextEmployeeId;
+    // For non-admin roles, department is required (needed for Employee ID generation)
+    if (userData.role !== UserRole.ADMIN) {
+      if (!userData.department || !userData.department.trim()) {
+        throw new BadRequestError(
+          'Department is required. Please create a department first before adding users.'
+        );
       }
+
+      // Verify the department actually exists in this organization
+      const deptExists = await Department.findOne({
+        organizationId: userData.organizationId,
+        name: { $regex: `^${userData.department.trim()}$`, $options: 'i' },
+      });
+      if (!deptExists) {
+        throw new BadRequestError(
+          `Department "${userData.department}" does not exist in this organization. Please create it first.`
+        );
+      }
+    }
+
+    // Auto-generate employeeId based on org + role + department
+    if (!userData.employeeId) {
+      userData.employeeId = await this.generateEmployeeId(
+        userData.organizationId,
+        userData.role,
+        userData.department
+      );
     } else {
-      const normalized = this.normalizeEmployeeId(userData.employeeId);
-      if (!normalized) {
+      // If manually provided, keep as-is (trim only)
+      const trimmed = String(userData.employeeId).trim();
+      if (!trimmed) {
         throw new BadRequestError('Invalid employee ID format');
       }
-      userData.employeeId = normalized;
+      userData.employeeId = trimmed;
     }
 
     // Check if email already exists within the same organization
