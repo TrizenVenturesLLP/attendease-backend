@@ -10,7 +10,16 @@ const router = Router();
  * @access  Public
  */
 router.post('/login', authController.login);
+
+/**
+ * @route   POST /api/auth/accept-invitation
+ * @desc    Complete invite by setting password
+ * @access  Public
+ */
 router.post('/accept-invitation', authController.acceptInvitation);
+
+router.post('/forgot-password', authController.forgotPassword);
+router.post('/reset-password', authController.resetPassword);
 
 /**
  * @route   GET /api/auth/microsoft/url

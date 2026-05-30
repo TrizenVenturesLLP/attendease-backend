@@ -5,19 +5,24 @@
 // 3. Email/employeeId uniqueness is per-organization
 // 4. Supervisor validation checks same organization
 
-import User, { AuthProvider, IUser, UserRole } from '../models/User';
+import crypto from 'crypto';
+import mongoose from 'mongoose';
+import User, { IUser, UserRole } from '../models/User';
+import Organization from '../models/Organization';
+import Department from '../models/Department';
 import {
   BadRequestError,
   NotFoundError,
   ForbiddenError,
   ConflictError,
 } from '../utils/AppError';
-import mongoose from 'mongoose';
+import { deleteUsersAndRelatedData } from './userCascadeDelete';
 
 export interface CreateUserData {
   organizationId?: string; // Optional for Super Admin (platform-level), required for others
   email: string;
-  password: string;
+  /** Omitted when inviting — a random password is set until accept-invitation */
+  password?: string;
   firstName: string;
   lastName: string;
   role: UserRole;
@@ -39,6 +44,7 @@ export interface UserFilters {
   department?: string;
   isActive?: boolean;
   search?: string;
+  organizationId?: string; // Optional override for Super Admin
 }
 
 class UserService {
@@ -87,60 +93,129 @@ class UserService {
     return existing;
   }
 
-  private normalizeEmployeeId(input?: string): string | undefined {
-    if (!input) return undefined;
-    const trimmed = String(input).trim();
-    if (!trimmed) return undefined;
-
-    // Accept either digits (e.g. "6") or full code (e.g. "EMP006")
-    const digitsOnly = trimmed.match(/^\d+$/);
-    const empCode = trimmed.match(/^EMP(\d+)$/i);
-
-    const numericPart = digitsOnly?.[0] ?? empCode?.[1];
-    if (!numericPart) {
-      return undefined;
+  /**
+   * Build a 2-char uppercase prefix from a name string (used for dept/role segment).
+   * e.g. "Engineering" → "EN", "Human Resources" → "HR"
+   */
+  private buildPrefix(name: string): string {
+    const clean = name.trim().toUpperCase().replace(/[^A-Z0-9\s]/g, '');
+    const words = clean.split(/\s+/).filter(Boolean);
+    if (words.length >= 2) {
+      return words.map(w => w[0]).join('').slice(0, 2).padEnd(2, 'X');
     }
-
-    const num = parseInt(numericPart, 10);
-    if (!Number.isFinite(num) || num <= 0) {
-      return undefined;
-    }
-
-    return `EMP${String(num).padStart(3, '0')}`;
+    return ((words[0] || 'XX').slice(0, 2)).padEnd(2, 'X');
   }
 
-  async getNextEmployeeId(organizationId: string): Promise<{ nextEmployeeId: string; existingSample: string[] }> {
-    const orgObjectId = new mongoose.Types.ObjectId(organizationId);
+  /**
+   * Map a UserRole to a 2-char role code.
+   */
+  private rolePrefix(role: UserRole): string {
+    const map: Record<UserRole, string> = {
+      [UserRole.SUPER_ADMIN]: 'SA',
+      [UserRole.ADMIN]: 'AD',
+      [UserRole.HR]: 'HR',
+      [UserRole.SUPERVISOR]: 'MG',
+      [UserRole.EMPLOYEE]: 'EM',
+    };
+    return map[role] ?? 'US';
+  }
 
-    const agg = await User.aggregate([
-      {
-        $match: {
-          organizationId: orgObjectId,
-          employeeId: { $regex: /^EMP\d+$/ },
-        },
-      },
-      {
-        $project: {
-          employeeId: 1,
-          num: {
-            $toInt: {
-              $substrBytes: [
-                '$employeeId',
-                3,
-                { $subtract: [{ $strLenBytes: '$employeeId' }, 3] },
-              ],
-            },
-          },
-        },
-      },
-      { $group: { _id: null, maxNum: { $max: '$num' } } },
-    ]);
+  /**
+   * Generate the next Employee ID — always exactly 8 characters.
+   *
+   * Format: {ORGCODE3}{ROLE2}{SEQ3}
+   *   e.g. TRZ + AD + 001 = TRZAD001  (Company Admin)
+   *        TRZ + HR + 001 = TRZHR001  (HR Admin)
+   *        TRZ + MG + 001 = TRZMG001  (Manager)
+   *        TRZ + EM + 001 = TRZEM001  (Employee)
+   *
+   * ORGCODE3 = unique 3-char code stored on the Organization (e.g. TRZ, ACM).
+   * ROLE2    = 2-char role code.
+   * SEQ3     = 3-digit sequence 001–999, scoped to same prefix within the org.
+   */
+  /**
+   * Generate the next Employee ID.
+   *
+   * Format:
+   *   Company Admin  → {ORGCODE3}{ROLE2}{SEQ3}          = 8 chars  e.g. TRZAD001
+   *   HR/Mgr/Employee→ {ORGCODE3}{DEPT2}{ROLE2}{SEQ3}   = 10 chars e.g. TRZENЕМ001
+   *
+   * ORGCODE3 = unique 3-char code stored on the Organization (e.g. TRZ).
+   * DEPT2    = first 2 chars of department name (non-admin only).
+   * ROLE2    = 2-char role code (AD / HR / MG / EM).
+   * SEQ3     = 3-digit sequence 001–999, scoped to same prefix within the org.
+   */
+  async generateEmployeeId(
+    organizationId: string,
+    role: UserRole,
+    departmentName?: string
+  ): Promise<string> {
+    const org = await Organization.findById(organizationId).select('orgCode').lean();
+    if (!org) throw new NotFoundError('Organization not found');
 
-    const maxNum = agg?.[0]?.maxNum ?? 0;
-    const nextNum = maxNum + 1;
-    const nextEmployeeId = `EMP${String(nextNum).padStart(3, '0')}`;
+    const orgCode = (org as any).orgCode || organizationId.slice(-3).toUpperCase();
+    const rolePfx = this.rolePrefix(role);                  // 2 chars
 
-    const existingSampleDocs = await User.find({ organizationId, employeeId: { $regex: /^EMP\d+$/ } })
+    let idPrefix: string;
+    if (role === UserRole.ADMIN) {
+      // Company Admin: no department → ORGCODE + ROLE
+      idPrefix = `${orgCode}${rolePfx}`;                    // 5 chars e.g. TRZAD
+    } else {
+      if (!departmentName) {
+        throw new BadRequestError(
+          'Department is required for non-admin users. Please create departments first.'
+        );
+      }
+      const deptPfx = this.buildPrefix(departmentName);     // 2 chars e.g. EN
+      // ORGCODE + DEPT + ROLE
+      idPrefix = `${orgCode}${deptPfx}${rolePfx}`;          // 7 chars e.g. TRZENЕМ
+    }
+
+    // Count existing IDs with this exact prefix + 3-digit seq
+    const count = await User.countDocuments({
+      organizationId: new mongoose.Types.ObjectId(organizationId),
+      employeeId: { $regex: `^${idPrefix}\\d{3}$` },
+    });
+
+    const seq = String(count + 1).padStart(3, '0');
+    return `${idPrefix}${seq}`;
+  }
+
+  /**
+   * Preview the next Employee ID (used by the frontend suggestion endpoint).
+   * Returns the generated ID and a sample of existing IDs with the same prefix.
+   */
+  async getNextEmployeeId(
+    organizationId: string,
+    role?: UserRole,
+    departmentName?: string
+  ): Promise<{ nextEmployeeId: string; existingSample: string[] }> {
+    const effectiveRole = role ?? UserRole.EMPLOYEE;
+
+    // For non-admin roles, department is part of the ID — need it to generate preview
+    if (effectiveRole !== UserRole.ADMIN && !departmentName) {
+      return { nextEmployeeId: '', existingSample: [] };
+    }
+
+    const nextEmployeeId = await this.generateEmployeeId(
+      organizationId,
+      effectiveRole,
+      departmentName
+    );
+
+    // Derive the prefix to fetch existing samples
+    const org = await Organization.findById(organizationId).select('orgCode').lean();
+    const orgCode = (org as any)?.orgCode || organizationId.slice(-3).toUpperCase();
+    const rolePfx = this.rolePrefix(effectiveRole);
+
+    const idPrefix = effectiveRole === UserRole.ADMIN
+      ? `${orgCode}${rolePfx}`                              // 5 chars e.g. TRZAD
+      : `${orgCode}${this.buildPrefix(departmentName!)}${rolePfx}`; // 7 chars e.g. TRZENЕМ
+
+    const existingSampleDocs = await User.find({
+      organizationId,
+      employeeId: { $regex: `^${idPrefix}\\d{3}$` },
+    })
       .select('employeeId')
       .sort({ createdAt: -1 })
       .limit(5)
@@ -182,6 +257,9 @@ class UserService {
 
     // Special handling for Super Admin
     if (userData.role === UserRole.SUPER_ADMIN) {
+      if (!userData.password) {
+        throw new BadRequestError('Password is required for Super Admin users');
+      }
       // Only Super Admin can create another Super Admin
       if (createdBy.role !== UserRole.SUPER_ADMIN) {
         throw new ForbiddenError('Only Super Admin can create other Super Admin users');
@@ -203,6 +281,10 @@ class UserService {
         throw new ConflictError('Super Admin with this email already exists');
       }
 
+      if (!userData.password?.trim()) {
+        throw new BadRequestError('Password is required when creating a Super Admin');
+      }
+
       const existingInactiveSuperAdmin = await User.findOne({
         email: normalizedEmail,
         role: UserRole.SUPER_ADMIN,
@@ -222,7 +304,7 @@ class UserService {
       // Create Super Admin (no organization-related validations needed)
       const superAdmin = new User({
         email: normalizedEmail,
-        password: userData.password,
+        password: userData.password.trim(),
         firstName: userData.firstName,
         lastName: userData.lastName,
         role: UserRole.SUPER_ADMIN,
@@ -238,16 +320,44 @@ class UserService {
       throw new BadRequestError('Organization ID is required for non-Super Admin users');
     }
 
-    // Auto-generate / normalize employeeId for org-scoped users
+    if (!userData.password) {
+      userData.password = crypto.randomBytes(12).toString('hex');
+    }
+
+    // For non-admin roles, department is required (needed for Employee ID generation)
+    if (userData.role !== UserRole.ADMIN) {
+      if (!userData.department || !userData.department.trim()) {
+        throw new BadRequestError(
+          'Department is required. Please create a department first before adding users.'
+        );
+      }
+
+      // Verify the department actually exists in this organization
+      const deptExists = await Department.findOne({
+        organizationId: userData.organizationId,
+        name: { $regex: `^${userData.department.trim()}$`, $options: 'i' },
+      });
+      if (!deptExists) {
+        throw new BadRequestError(
+          `Department "${userData.department}" does not exist in this organization. Please create it first.`
+        );
+      }
+    }
+
+    // Auto-generate employeeId based on org + role + department
     if (!userData.employeeId) {
-      const { nextEmployeeId } = await this.getNextEmployeeId(userData.organizationId);
-      userData.employeeId = nextEmployeeId;
+      userData.employeeId = await this.generateEmployeeId(
+        userData.organizationId,
+        userData.role,
+        userData.department
+      );
     } else {
-      const normalized = this.normalizeEmployeeId(userData.employeeId);
-      if (!normalized) {
+      // If manually provided, keep as-is (trim only)
+      const trimmed = String(userData.employeeId).trim();
+      if (!trimmed) {
         throw new BadRequestError('Invalid employee ID format');
       }
-      userData.employeeId = normalized;
+      userData.employeeId = trimmed;
     }
 
     const normalizedEmail = userData.email.toLowerCase().trim();
@@ -294,10 +404,15 @@ class UserService {
       }
     }
 
-    // Create user
+    // Invite flow: no password in request — user sets it via email link
+    const password =
+      userData.password?.trim() ||
+      crypto.randomBytes(32).toString('hex');
+
     const user = new User({
       ...userData,
       email: normalizedEmail,
+      password,
       createdBy: createdByUserId,
     });
 
@@ -314,34 +429,57 @@ class UserService {
   async getAllUsers(
     filters?: UserFilters, 
     organizationId?: string, 
-    requesterRole?: UserRole, 
-    requesterId?: string
+    requesterRole?: UserRole
   ): Promise<IUser[]> {
     const query: any = {};
 
-    // Add organization filter (required for non-Super Admin)
-    if (organizationId) {
-      query.organizationId = organizationId;
+    // Enforce organization isolation for all roles except Super Admin
+    if (requesterRole !== UserRole.SUPER_ADMIN) {
+      if (!organizationId) {
+        throw new ForbiddenError('Organization identification is required');
+      }
+      query.organizationId = new mongoose.Types.ObjectId(organizationId);
+    } else if (filters?.organizationId) {
+      // Super Admin can optionally filter by organization
+      query.organizationId = new mongoose.Types.ObjectId(filters.organizationId);
     }
 
-    // SUPERVISORS can only see their own team
-    if (requesterRole === UserRole.SUPERVISOR && requesterId) {
-      query.supervisorId = requesterId;
+    // SUPERVISORS (Managers) visibility rules
+    // Requirement: Show users in their organization who are NOT HR or Company Admin
+    if (requesterRole === UserRole.SUPERVISOR || (requesterRole as string) === 'manager') {
+      // Exclude: Super Admin, Admin (Company Admin), and HR
+      query.role = { 
+        $nin: [UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.HR] 
+      };
+      
+      // If a specific role filter was requested, combine it (still within allowed roles)
+      if (filters?.role) {
+        const forbiddenRoles = [UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.HR];
+        if (forbiddenRoles.includes(filters.role)) {
+          query.role = '__HIDDEN__';
+        } else {
+          query.role = filters.role;
+        }
+      }
     }
 
-    // Apply filters
-    if (filters?.role) {
-      query.role = filters.role;
-    }
-
-    // HR can only see employees, supervisors, and other HR (not Admin or Super Admin)
+    // HR can only see HR, SUPERVISOR, and EMPLOYEE roles (NOT Admin or Super Admin)
     if (requesterRole === UserRole.HR) {
-      const allowedRolesForHR = [UserRole.EMPLOYEE, UserRole.SUPERVISOR, UserRole.HR];
-      if (query.role && !allowedRolesForHR.includes(query.role as UserRole)) {
-        query.role = { $in: allowedRolesForHR };
-      } else if (!query.role) {
+      const allowedRolesForHR = [UserRole.HR, UserRole.SUPERVISOR, UserRole.EMPLOYEE];
+      if (filters?.role) {
+        if (!allowedRolesForHR.includes(filters.role)) {
+          query.role = '__HIDDEN__'; // Force no results
+        } else {
+          query.role = filters.role;
+        }
+      } else {
         query.role = { $in: allowedRolesForHR };
       }
+    }
+
+    // Apply role filter if not already set by hierarchy rules above
+    if (filters?.role && !query.role) {
+      query.role = filters.role;
     }
 
     if (filters?.department) {
@@ -390,9 +528,12 @@ class UserService {
    * Get team members for a supervisor
    */
   async getTeamMembers(supervisorId: string, organizationId?: string): Promise<IUser[]> {
-    const query: any = { supervisorId, isActive: true };
+    const query: any = { 
+      supervisorId: new mongoose.Types.ObjectId(supervisorId), 
+      isActive: true 
+    };
     if (organizationId) {
-      query.organizationId = organizationId;
+      query.organizationId = new mongoose.Types.ObjectId(organizationId);
     }
 
     const users = await User.find(query)
@@ -406,14 +547,19 @@ class UserService {
    * Get user by ID
    * organizationId is used to verify user belongs to organization (if provided)
    */
-  async getUserById(userId: string, organizationId?: string): Promise<IUser> {
+  async getUserById(
+    userId: string, 
+    organizationId?: string,
+    requesterRole?: UserRole,
+    requesterId?: string
+  ): Promise<IUser> {
     if (!mongoose.Types.ObjectId.isValid(userId)) {
       throw new BadRequestError('Invalid user ID');
     }
 
-    const query: any = { _id: userId };
+    const query: any = { _id: new mongoose.Types.ObjectId(userId) };
     if (organizationId) {
-      query.organizationId = organizationId;
+      query.organizationId = new mongoose.Types.ObjectId(organizationId);
     }
 
     const user = await User.findOne(query)
@@ -422,6 +568,24 @@ class UserService {
 
     if (!user) {
       throw new NotFoundError('User not found');
+    }
+
+    // Role-based visibility check
+    if (requesterRole === UserRole.HR) {
+      // HR cannot see ADMIN or SUPER_ADMIN
+      if (user.role === UserRole.ADMIN || user.role === UserRole.SUPER_ADMIN) {
+        throw new ForbiddenError('HR Admin cannot access Company Admin profiles');
+      }
+    } else if (requesterRole === UserRole.SUPERVISOR) {
+      // Manager can see any EMPLOYEE in the organization
+      if (user.role !== UserRole.EMPLOYEE && user._id.toString() !== requesterId) {
+        throw new ForbiddenError('Managers can only access Employee profiles');
+      }
+    } else if (requesterRole === UserRole.EMPLOYEE) {
+      // Employees can only see themselves
+      if (user._id.toString() !== requesterId) {
+        throw new ForbiddenError('Employees can only access their own profile');
+      }
     }
 
     return user;
@@ -479,17 +643,33 @@ class UserService {
    * Update user information
    * requesterRole is used to enforce HR can only update Employees
    */
-  async updateUser(userId: string, updates: UpdateUserData, requesterRole?: UserRole): Promise<IUser> {
+  async updateUser(
+    userId: string, 
+    updates: UpdateUserData, 
+    requesterRole?: UserRole,
+    requesterUserId?: string
+  ): Promise<IUser> {
     const user = await User.findById(userId);
 
     if (!user) {
       throw new NotFoundError('User not found');
     }
 
-    // HR can only update EMPLOYEE roles
+    // HR can only update HR, SUPERVISOR, or EMPLOYEE roles (NOT Admin or Super Admin)
     if (requesterRole === UserRole.HR) {
+      const allowedRolesForHR = [UserRole.HR, UserRole.SUPERVISOR, UserRole.EMPLOYEE];
+      if (!allowedRolesForHR.includes(user.role as UserRole)) {
+        throw new ForbiddenError('HR Admin cannot update Company Admin profiles');
+      }
+    }
+
+    // Manager can only update EMPLOYEE roles in their team
+    if (requesterRole === UserRole.SUPERVISOR) {
       if (user.role !== UserRole.EMPLOYEE) {
-        throw new ForbiddenError('HR can only update Employee users');
+        throw new ForbiddenError('Managers can only update Employee profiles');
+      }
+      if (user.supervisorId?.toString() !== requesterUserId) {
+        throw new ForbiddenError('Managers can only update their own team members');
       }
     }
 
@@ -528,29 +708,39 @@ class UserService {
   }
 
   /**
-   * Delete user (soft delete by setting isActive to false)
+   * Permanently delete user and related records (frees email for re-invite).
    */
-  async deleteUser(userId: string, requesterUserId: string, requesterRole?: UserRole): Promise<void> {
+  async deleteUser(
+    userId: string,
+    requesterUserId: string,
+    requesterRole?: UserRole,
+    organizationId?: string
+  ): Promise<void> {
     const user = await User.findById(userId);
 
     if (!user) {
       throw new NotFoundError('User not found');
     }
 
-    // Prevent self-deletion for all roles to avoid locking out current session.
     if (user._id.toString() === requesterUserId.toString()) {
       throw new ForbiddenError('You cannot delete your own account');
     }
 
-    // Only Super Admin can delete Super Admin users.
-    if (user.role === UserRole.SUPER_ADMIN) {
-      if (requesterRole !== UserRole.SUPER_ADMIN) {
-        throw new ForbiddenError('Only Super Admin can delete System Admin users');
-      }
+    if (user.role === UserRole.SUPER_ADMIN && requesterRole !== UserRole.SUPER_ADMIN) {
+      throw new ForbiddenError('Only Super Admin can delete System Admin users');
     }
 
-    this.releaseDeletedUserIdentifiers(user);
-    await user.save();
+    if (
+      organizationId &&
+      user.organizationId?.toString() !== organizationId
+    ) {
+      throw new ForbiddenError('User does not belong to your organization');
+    }
+
+    const deleted = await deleteUsersAndRelatedData([user._id]);
+    if (deleted === 0) {
+      throw new NotFoundError('User not found');
+    }
   }
 
   /**

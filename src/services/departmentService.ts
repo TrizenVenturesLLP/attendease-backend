@@ -1,4 +1,5 @@
 import Department, { IDepartment } from '../models/Department';
+import User from '../models/User';
 import mongoose from 'mongoose';
 
 export class DepartmentService {
@@ -108,7 +109,7 @@ export class DepartmentService {
   }
 
   /**
-   * Add member to department
+   * Add member to department — also updates User.department field
    */
   async addMemberToDepartment(deptId: string, userId: string, organizationId?: string): Promise<IDepartment | null> {
     const query: any = { _id: deptId };
@@ -124,11 +125,19 @@ export class DepartmentService {
       .populate('headOfDepartment', 'firstName lastName email')
       .populate('members', 'firstName lastName email employeeId');
 
+    if (department) {
+      // Sync User.department string field
+      await User.updateOne(
+        { _id: userId },
+        { $set: { department: department.name } }
+      );
+    }
+
     return department;
   }
 
   /**
-   * Remove member from department
+   * Remove member from department — also clears User.department field
    */
   async removeMemberFromDepartment(deptId: string, userId: string, organizationId?: string): Promise<IDepartment | null> {
     const query: any = { _id: deptId };
@@ -143,6 +152,28 @@ export class DepartmentService {
     )
       .populate('headOfDepartment', 'firstName lastName email')
       .populate('members', 'firstName lastName email employeeId');
+
+    if (department) {
+      // Clear User.department — check if user is in another dept first
+      const otherDept = await Department.findOne({
+        _id: { $ne: deptId },
+        members: new mongoose.Types.ObjectId(userId),
+        ...(organizationId ? { organizationId } : {}),
+      });
+      if (!otherDept) {
+        // Not in any other department — clear the field
+        await User.updateOne(
+          { _id: userId },
+          { $unset: { department: '' } }
+        );
+      } else {
+        // Update to the other department's name
+        await User.updateOne(
+          { _id: userId },
+          { $set: { department: otherDept.name } }
+        );
+      }
+    }
 
     return department;
   }

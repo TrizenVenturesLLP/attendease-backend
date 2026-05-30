@@ -1,8 +1,11 @@
 import { Request, Response, NextFunction } from 'express';
 import organizationService from '../services/organizationService';
+import userService from '../services/userService';
 import emailNotificationService from '../services/emailNotificationService';
 import { ApiResponse } from '../utils/ApiResponse';
-import { ForbiddenError } from '../utils/AppError';
+import { BadRequestError, ForbiddenError, ConflictError } from '../utils/AppError';
+import { UserRole } from '../models/User';
+import { logger } from '../utils/logger';
 
 class OrganizationController {
   /**
@@ -27,13 +30,60 @@ class OrganizationController {
       });
 
       if (companyAdminEmail) {
-        void emailNotificationService.sendOrganizationCreatedFlow({
-          organizationId: organization._id.toString(),
-          organizationName: organization.name,
-          companyAdminEmail,
-          companyAdminName,
-          createdByUserId: req.user?.userId,
-        });
+        const normalizedEmail = String(companyAdminEmail).trim().toLowerCase();
+        if (!req.user?.userId) {
+          throw new BadRequestError('Authenticated user required to invite company admin');
+        }
+
+        const nameParts = String(companyAdminName || 'Company Admin').trim().split(/\s+/);
+        const firstName = nameParts[0] || 'Company';
+        const lastName = nameParts.slice(1).join(' ') || 'Admin';
+
+        let adminUserExists = false;
+        try {
+          await userService.createUser(
+            {
+              organizationId: organization._id.toString(),
+              email: normalizedEmail,
+              firstName,
+              lastName,
+              role: UserRole.ADMIN,
+            },
+            req.user.userId
+          );
+          logger.info('Company admin user created for new organization', {
+            organizationId: organization._id.toString(),
+            email: normalizedEmail,
+          });
+        } catch (userError) {
+          if (userError instanceof ConflictError) {
+            adminUserExists = true;
+            logger.warn('Company admin already exists — will still try onboarding email', {
+              email: normalizedEmail,
+              organizationId: organization._id.toString(),
+            });
+          } else {
+            throw userError;
+          }
+        }
+
+        try {
+          await emailNotificationService.sendOrganizationCreatedFlow({
+            organizationId: organization._id.toString(),
+            organizationName: organization.name,
+            companyAdminEmail: normalizedEmail,
+            companyAdminName,
+            createdByUserId: req.user.userId,
+          });
+          logger.info('Organization onboarding email dispatched', {
+            email: normalizedEmail,
+          });
+        } catch (emailError) {
+          logger.error('Organization onboarding email failed', {
+            email: normalizedEmail,
+            adminUserExists,
+          });
+        }
       }
 
       const response: ApiResponse<typeof organization> = {

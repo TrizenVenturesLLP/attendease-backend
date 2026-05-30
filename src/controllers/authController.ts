@@ -141,8 +141,9 @@ class AuthController {
   }
 
   /**
-   * PATCH /api/auth/me/platform-preferences
-   * System Admin platform UI preferences (notifications, etc.)
+   * @route   PATCH /api/auth/me/platform-preferences
+   * @desc    System Admin platform UI preferences
+   * @access  Private (System Admin)
    */
   async updatePlatformPreferences(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
@@ -160,6 +161,29 @@ class AuthController {
         success: true,
         message: 'Preferences updated',
         data: user,
+        timestamp: new Date().toISOString(),
+      };
+
+      res.status(200).json(response);
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  /**
+   * @route   POST /api/auth/accept-invitation
+   * @desc    Set password from email invitation link
+   * @access  Public
+   */
+  async acceptInvitation(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const { email, organizationId, password } = req.body;
+
+      await authService.acceptInvitation(email, organizationId, password);
+
+      const response: ApiResponse = {
+        success: true,
+        message: 'Password set successfully. You can now log in.',
         timestamp: new Date().toISOString(),
       };
 
@@ -219,19 +243,42 @@ class AuthController {
   }
 
   /**
-   * @route   POST /api/auth/accept-invitation
-   * @desc    Accept invitation and set password
+   * @route   POST /api/auth/forgot-password
+   * @desc    Request password reset email
    * @access  Public
    */
-  async acceptInvitation(req: Request, res: Response, next: NextFunction): Promise<void> {
+  async forgotPassword(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
-      const { email, organizationId, password } = req.body;
+      const { email } = req.body;
 
-      await authService.acceptInvitation(email, organizationId, password);
+      await authService.forgotPassword(email);
 
       const response: ApiResponse = {
         success: true,
-        message: 'Password set successfully. You can now login.',
+        message: 'If an account with that email exists, a password reset link has been sent.',
+        timestamp: new Date().toISOString(),
+      };
+
+      res.status(200).json(response);
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  /**
+   * @route   POST /api/auth/reset-password
+   * @desc    Reset password using token
+   * @access  Public
+   */
+  async resetPassword(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const { token, password } = req.body;
+
+      await authService.resetPassword(token, password);
+
+      const response: ApiResponse = {
+        success: true,
+        message: 'Password has been reset successfully.',
         timestamp: new Date().toISOString(),
       };
 

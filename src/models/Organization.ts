@@ -34,6 +34,7 @@ export interface MicrosoftAuthConfig {
 
 export interface IOrganization extends Document {
   name: string;
+  orgCode: string;  // 3-char unique code auto-generated from org name e.g. "TRZ"
   subdomain?: string;
   isActive: boolean;
   /** Set when the organization is soft-deleted (removed from active operations). */
@@ -125,6 +126,15 @@ const OrganizationSchema = new Schema<IOrganization>(
       trim: true,
       maxlength: 100,
       index: true,
+    },
+    orgCode: {
+      type: String,
+      trim: true,
+      uppercase: true,
+      unique: true,
+      sparse: true,
+      maxlength: 3,
+      match: /^[A-Z0-9]{3}$/,
     },
     subdomain: {
       type: String,

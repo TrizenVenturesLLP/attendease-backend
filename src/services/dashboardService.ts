@@ -33,7 +33,7 @@ class DashboardService {
       case UserRole.ADMIN:
         return this.getAdminHRStats(organizationId);
       case UserRole.HR:
-        return this.getAdminHRStats(organizationId, userRole, userId);
+        return this.getAdminHRStats(organizationId, userRole);
       case UserRole.SUPERVISOR:
         return this.getSupervisorStats(userId, organizationId);
       default:
@@ -47,15 +47,13 @@ class DashboardService {
    */
   private async getAdminHRStats(
     organizationId: string | undefined,
-    requesterRole?: UserRole,
-    requesterId?: string
+    requesterRole?: UserRole
   ): Promise<DashboardStats> {
     // Get users (role-scoped for HR: only employees, supervisors, HR)
     const users = await userService.getAllUsers(
       {},
       organizationId,
-      requesterRole,
-      requesterId
+      requesterRole
     );
     const totalUsers = users.length;
     const userIds = users.map((u) => u._id.toString());

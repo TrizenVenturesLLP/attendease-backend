@@ -5,6 +5,7 @@ import { ApiResponse } from '../utils/ApiResponse';
 import { BadRequestError, ForbiddenError } from '../utils/AppError';
 import { UserRole } from '../models/User';
 import { resolveOrganizationId } from '../utils/resolveOrganizationId';
+import { logger } from '../utils/logger';
 
 class UserController {
   /**
@@ -43,8 +44,10 @@ class UserController {
       // Super Admin creating another Super Admin doesn't need organizationId
       // Super Admin creating organization Admin DOES need organizationId
       if (req.user.role === UserRole.SUPER_ADMIN) {
-        if (userData.role === UserRole.ADMIN && !userData.organizationId) {
-          throw new BadRequestError('Organization ID is required when creating organization Admin');
+        if (userData.role !== UserRole.SUPER_ADMIN && !userData.organizationId) {
+          throw new BadRequestError(
+            'Organization ID is required when creating organization users'
+          );
         }
         if (userData.role === UserRole.SUPER_ADMIN && userData.organizationId) {
           // Prevent creating platform-level System Admin from organization-scoped flow
@@ -54,20 +57,60 @@ class UserController {
         }
       }
 
-      const user = await userService.createUser(userData, req.user.userId);
-
-      void emailNotificationService.sendRoleInvitation({
-        email: user.email,
-        role: user.role as UserRole,
-        organizationId: user.organizationId?.toString(),
-        invitedByUserId: req.user.userId,
-        firstName: user.firstName,
-        lastName: user.lastName,
+      logger.info('Create user request', {
+        email: userData.email,
+        role: userData.role,
+        organizationId: userData.organizationId,
+        createdBy: req.user.userId,
       });
+
+      const user = await userService.createUser(userData, req.user.userId);
+      const inviteRole = (userData.role || user.role) as UserRole;
+
+      logger.info('User created, triggering invitation email', {
+        userId: user._id,
+        email: user.email,
+        requestedRole: userData.role,
+        savedRole: user.role,
+        inviteRole,
+        organizationId: user.organizationId?.toString(),
+        createdBy: req.user.userId,
+      });
+
+      let invitationEmailSent = false;
+      let invitationEmailError: string | undefined;
+
+      try {
+        await emailNotificationService.sendRoleInvitation({
+          email: user.email,
+          role: inviteRole,
+          organizationId:
+            user.organizationId?.toString() ||
+            userData.organizationId ||
+            req.organizationId ||
+            undefined,
+          invitedByUserId: req.user.userId,
+          firstName: user.firstName,
+          lastName: user.lastName,
+        });
+        invitationEmailSent = true;
+      } catch (emailError: any) {
+        invitationEmailError =
+          emailError?.response?.data?.error ||
+          emailError?.response?.data?.message ||
+          emailError?.message ||
+          'Email service error';
+        logger.error('Invitation email failed after user create', {
+          email: user.email,
+          error: invitationEmailError,
+        });
+      }
 
       const response: ApiResponse<typeof user> = {
         success: true,
-        message: 'User created successfully',
+        message: invitationEmailSent
+          ? 'User created successfully. Invitation email queued.'
+          : `User created, but invitation email failed: ${invitationEmailError}. Check backend and email-service logs.`,
         data: user,
         timestamp: new Date().toISOString(),
       };
@@ -100,8 +143,7 @@ class UserController {
       const users = await userService.getAllUsers(
         filters, 
         req.organizationId,
-        req.user.role as UserRole,
-        req.user.userId
+        req.user.role as UserRole
       );
 
       const response: ApiResponse<typeof users> = {
@@ -172,9 +214,17 @@ class UserController {
    */
   async getUserById(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
+      if (!req.user) {
+        throw new BadRequestError('User not authenticated');
+      }
       const { id } = req.params;
 
-      const user = await userService.getUserById(id, req.organizationId);
+      const user = await userService.getUserById(
+        id, 
+        req.organizationId,
+        req.user.role as UserRole,
+        req.user.userId
+      );
 
       const response: ApiResponse<typeof user> = {
         success: true,
@@ -203,13 +253,50 @@ class UserController {
       const { id } = req.params;
       const updates: UpdateUserData = req.body;
 
-      // Pass requester role for permission validation
-      const user = await userService.updateUser(id, updates, req.user.role as UserRole);
+      // Pass requester role and ID for permission validation
+      const user = await userService.updateUser(
+        id, 
+        updates, 
+        req.user.role as UserRole,
+        req.user.userId
+      );
 
       const response: ApiResponse<typeof user> = {
         success: true,
         message: 'User updated successfully',
         data: user,
+        timestamp: new Date().toISOString(),
+      };
+
+      res.status(200).json(response);
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  /**
+   * @route   GET /api/users/next-employee-id
+   * @desc    Suggest next employee ID for an organization
+   * @access  Private (Super Admin/Admin/HR)
+   */
+  async getNextEmployeeId(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const organizationId =
+        (req.organizationId as string | undefined) ||
+        (req.query.organizationId as string | undefined);
+
+      if (!organizationId) {
+        throw new BadRequestError('Organization ID is required');
+      }
+
+      const role = (req.query.role as string | undefined) as UserRole | undefined;
+      const department = req.query.department as string | undefined;
+
+      const result = await userService.getNextEmployeeId(organizationId, role, department);
+
+      const response: ApiResponse<typeof result> = {
+        success: true,
+        data: result,
         timestamp: new Date().toISOString(),
       };
 
@@ -282,8 +369,54 @@ class UserController {
   }
 
   /**
+   * @route   POST /api/users/:id/resend-invitation
+   * @desc    Resend invitation email to an existing user
+   * @access  Private (Super Admin/Admin)
+   */
+  async resendInvitation(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      if (!req.user) {
+        throw new BadRequestError('User not authenticated');
+      }
+
+      const { id } = req.params;
+      const user = await userService.getUserById(id, req.organizationId);
+
+      if (user.role === UserRole.SUPER_ADMIN) {
+        throw new ForbiddenError('Cannot send invitation to super admin');
+      }
+
+      logger.info('Resending invitation email', {
+        userId: id,
+        email: user.email,
+        role: user.role,
+      });
+
+      await emailNotificationService.sendRoleInvitation({
+        email: user.email,
+        role: user.role as UserRole,
+        organizationId:
+          user.organizationId?.toString() || req.organizationId || undefined,
+        invitedByUserId: req.user.userId,
+        firstName: user.firstName,
+        lastName: user.lastName,
+      });
+
+      const response: ApiResponse = {
+        success: true,
+        message: 'Invitation email sent successfully',
+        timestamp: new Date().toISOString(),
+      };
+
+      res.status(200).json(response);
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  /**
    * @route   DELETE /api/users/:id
-   * @desc    Delete user (soft delete)
+   * @desc    Permanently delete user (removes email from DB)
    * @access  Private (Super Admin/Admin)
    */
   async deleteUser(req: Request, res: Response, next: NextFunction): Promise<void> {
@@ -294,11 +427,16 @@ class UserController {
 
       const { id } = req.params;
 
-      await userService.deleteUser(id, req.user.userId, req.user.role as UserRole);
+      await userService.deleteUser(
+        id,
+        req.user.userId,
+        req.user.role as UserRole,
+        req.organizationId
+      );
 
       const response: ApiResponse = {
         success: true,
-        message: 'User deleted successfully',
+        message: 'User permanently deleted',
         timestamp: new Date().toISOString(),
       };
 
@@ -321,32 +459,6 @@ class UserController {
         success: true,
         message: 'User statistics retrieved successfully',
         data: stats,
-        timestamp: new Date().toISOString(),
-      };
-
-      res.status(200).json(response);
-    } catch (error) {
-      next(error);
-    }
-  }
-
-  /**
-   * @route   GET /api/users/next-employee-id
-   * @desc    Get next available employeeId for the current organization
-   * @access  Private (Admin/HR)
-   */
-  async getNextEmployeeId(req: Request, res: Response, next: NextFunction): Promise<void> {
-    try {
-      if (!req.organizationId) {
-        throw new BadRequestError('Organization ID is required');
-      }
-
-      const result = await userService.getNextEmployeeId(req.organizationId);
-
-      const response: ApiResponse<typeof result> = {
-        success: true,
-        message: 'Next employee ID retrieved successfully',
-        data: result,
         timestamp: new Date().toISOString(),
       };
 
