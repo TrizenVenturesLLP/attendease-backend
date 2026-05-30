@@ -4,6 +4,7 @@ import emailNotificationService from '../services/emailNotificationService';
 import { ApiResponse } from '../utils/ApiResponse';
 import { BadRequestError, ForbiddenError } from '../utils/AppError';
 import { UserRole } from '../models/User';
+import { resolveOrganizationId } from '../utils/resolveOrganizationId';
 
 class UserController {
   /**
@@ -17,10 +18,14 @@ class UserController {
         throw new BadRequestError('User not authenticated');
       }
 
+      let organizationId = req.organizationId || req.body.organizationId;
+      if (req.body.role !== UserRole.SUPER_ADMIN) {
+        organizationId = await resolveOrganizationId(req);
+      }
+
       const userData: CreateUserData = {
         ...req.body,
-        // Use organizationId from tenant middleware or from body (for Super Admin)
-        organizationId: req.organizationId || req.body.organizationId,
+        organizationId,
       };
 
       // Role-based validation: prevent lower roles from creating higher roles

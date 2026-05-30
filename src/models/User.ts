@@ -198,13 +198,30 @@ UserSchema.methods.comparePassword = async function (
 };
 
 // Index for faster queries
-// Super Admin has globally unique email (no org), others are unique per org
-UserSchema.index({ email: 1 }, { 
-  unique: true, 
-  partialFilterExpression: { role: UserRole.SUPER_ADMIN } 
-});
-UserSchema.index({ organizationId: 1, email: 1 }, { unique: true, sparse: true });
-UserSchema.index({ organizationId: 1, employeeId: 1 }, { unique: true, sparse: true });
+// Uniqueness applies only to active users so soft-deleted emails can be reused
+UserSchema.index(
+  { email: 1 },
+  {
+    unique: true,
+    partialFilterExpression: { role: UserRole.SUPER_ADMIN, isActive: true },
+  }
+);
+UserSchema.index(
+  { organizationId: 1, email: 1 },
+  {
+    unique: true,
+    sparse: true,
+    partialFilterExpression: { isActive: true },
+  }
+);
+UserSchema.index(
+  { organizationId: 1, employeeId: 1 },
+  {
+    unique: true,
+    sparse: true,
+    partialFilterExpression: { isActive: true },
+  }
+);
 UserSchema.index({ organizationId: 1, department: 1 });
 UserSchema.index({ organizationId: 1, supervisorId: 1 });
 UserSchema.index({ organizationId: 1, role: 1 });

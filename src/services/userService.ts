@@ -5,7 +5,7 @@
 // 3. Email/employeeId uniqueness is per-organization
 // 4. Supervisor validation checks same organization
 
-import User, { IUser, UserRole } from '../models/User';
+import User, { AuthProvider, IUser, UserRole } from '../models/User';
 import {
   BadRequestError,
   NotFoundError,
@@ -42,6 +42,51 @@ export interface UserFilters {
 }
 
 class UserService {
+  /** Frees email/employeeId on soft-delete so the same address can be invited again. */
+  private releaseDeletedUserIdentifiers(user: IUser): void {
+    user.isActive = false;
+    user.email = `deleted.${user._id.toString()}@removed.trizenhr`;
+    user.employeeId = undefined;
+    user.microsoftId = undefined;
+  }
+
+  private async reactivateOrgUser(
+    existing: IUser,
+    userData: CreateUserData,
+    createdByUserId: string
+  ): Promise<IUser> {
+    if (userData.supervisorId) {
+      const supervisor = await User.findOne({
+        _id: userData.supervisorId,
+        organizationId: userData.organizationId,
+        isActive: true,
+      });
+      if (!supervisor) {
+        throw new NotFoundError('Supervisor not found in this organization');
+      }
+      if (supervisor.role !== UserRole.SUPERVISOR && supervisor.role !== UserRole.ADMIN) {
+        throw new BadRequestError('Assigned supervisor must have supervisor or admin role');
+      }
+    }
+
+    existing.email = userData.email.toLowerCase().trim();
+    existing.password = userData.password;
+    existing.firstName = userData.firstName;
+    existing.lastName = userData.lastName;
+    existing.role = userData.role;
+    existing.department = userData.department;
+    existing.supervisorId = userData.supervisorId
+      ? new mongoose.Types.ObjectId(userData.supervisorId)
+      : undefined;
+    existing.employeeId = userData.employeeId;
+    existing.isActive = true;
+    existing.createdBy = new mongoose.Types.ObjectId(createdByUserId);
+    existing.authProvider = AuthProvider.LOCAL;
+
+    await existing.save();
+    return existing;
+  }
+
   private normalizeEmployeeId(input?: string): string | undefined {
     if (!input) return undefined;
     const trimmed = String(input).trim();
@@ -147,18 +192,36 @@ class UserService {
         throw new BadRequestError('Super Admin users should not have an organization ID');
       }
 
-      // Check if email already exists globally for Super Admin
-      const existingSuperAdmin = await User.findOne({ 
-        email: userData.email,
-        role: UserRole.SUPER_ADMIN
+      const normalizedEmail = userData.email.toLowerCase().trim();
+
+      const existingActiveSuperAdmin = await User.findOne({
+        email: normalizedEmail,
+        role: UserRole.SUPER_ADMIN,
+        isActive: true,
       });
-      if (existingSuperAdmin) {
+      if (existingActiveSuperAdmin) {
         throw new ConflictError('Super Admin with this email already exists');
+      }
+
+      const existingInactiveSuperAdmin = await User.findOne({
+        email: normalizedEmail,
+        role: UserRole.SUPER_ADMIN,
+        isActive: false,
+      });
+      if (existingInactiveSuperAdmin) {
+        existingInactiveSuperAdmin.password = userData.password;
+        existingInactiveSuperAdmin.firstName = userData.firstName;
+        existingInactiveSuperAdmin.lastName = userData.lastName;
+        existingInactiveSuperAdmin.isActive = true;
+        existingInactiveSuperAdmin.createdBy = new mongoose.Types.ObjectId(createdByUserId);
+        existingInactiveSuperAdmin.authProvider = AuthProvider.LOCAL;
+        await existingInactiveSuperAdmin.save();
+        return existingInactiveSuperAdmin;
       }
 
       // Create Super Admin (no organization-related validations needed)
       const superAdmin = new User({
-        email: userData.email,
+        email: normalizedEmail,
         password: userData.password,
         firstName: userData.firstName,
         lastName: userData.lastName,
@@ -187,19 +250,31 @@ class UserService {
       userData.employeeId = normalized;
     }
 
-    // Check if email already exists within the same organization
-    const existingUser = await User.findOne({ 
-      email: userData.email,
-      organizationId: userData.organizationId 
+    const normalizedEmail = userData.email.toLowerCase().trim();
+
+    const existingActiveUser = await User.findOne({
+      email: normalizedEmail,
+      organizationId: userData.organizationId,
+      isActive: true,
     });
-    if (existingUser) {
+    if (existingActiveUser) {
       throw new ConflictError('Email already in use in this organization');
     }
 
-    // Check if employeeId already exists within the same organization
+    const existingInactiveUser = await User.findOne({
+      email: normalizedEmail,
+      organizationId: userData.organizationId,
+      isActive: false,
+    });
+    if (existingInactiveUser) {
+      return this.reactivateOrgUser(existingInactiveUser, userData, createdByUserId);
+    }
+
+    // Check if employeeId already exists within the same organization (active users only)
     const existingEmployee = await User.findOne({
       employeeId: userData.employeeId,
       organizationId: userData.organizationId,
+      isActive: true,
     });
     if (existingEmployee) {
       throw new ConflictError('Employee ID already in use in this organization');
@@ -222,6 +297,7 @@ class UserService {
     // Create user
     const user = new User({
       ...userData,
+      email: normalizedEmail,
       createdBy: createdByUserId,
     });
 
@@ -419,9 +495,11 @@ class UserService {
 
     // Check if employeeId is being changed and if it's already in use within organization
     if (updates.employeeId && updates.employeeId !== user.employeeId) {
-      const existing = await User.findOne({ 
+      const existing = await User.findOne({
         employeeId: updates.employeeId,
-        organizationId: user.organizationId
+        organizationId: user.organizationId,
+        isActive: true,
+        _id: { $ne: user._id },
       });
       if (existing) {
         throw new ConflictError('Employee ID already in use in this organization');
@@ -471,7 +549,7 @@ class UserService {
       }
     }
 
-    user.isActive = false;
+    this.releaseDeletedUserIdentifiers(user);
     await user.save();
   }
 
