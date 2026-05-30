@@ -1,43 +1,88 @@
 import Leave, { ILeave, LeaveType, LeaveStatus } from '../models/Leave';
-import LeaveBalance from '../models/LeaveBalance';
+import LeaveBalance, { ILeaveBalance } from '../models/LeaveBalance';
 import Attendance, { AttendanceStatus } from '../models/Attendance';
-import User from '../models/User';
-import { startOfDay, endOfDay, eachDayOfInterval, isWeekend } from 'date-fns';
+import User, { UserRole } from '../models/User';
+import { startOfDay, endOfDay, eachDayOfInterval } from 'date-fns';
+import { LeavePolicy } from '../models/Organization';
+import { getOrganizationLeavePolicy } from '../utils/organizationSettings';
+import {
+  countOrganizationWorkingDaysInRange,
+  getNonWorkingHolidayDateKeys,
+  getOrganizationWeeklyOffPattern,
+  isOrgWorkingDay,
+} from '../utils/workingDays';
 
 export class LeaveService {
-  /**
-   * Calculate working days between two dates (exclude weekends)
-   */
-  private calculateWorkingDays(startDate: Date, endDate: Date): number {
-    const days = eachDayOfInterval({ start: startDate, end: endDate });
-    const workingDays = days.filter((day) => !isWeekend(day));
-    return workingDays.length;
+  private applyLeavePolicyTotals(balance: ILeaveBalance, policy: LeavePolicy): void {
+    balance.sickLeave.total = policy.sickLeave;
+    balance.sickLeave.remaining = Math.max(0, policy.sickLeave - balance.sickLeave.used);
+
+    balance.casualLeave.total = policy.casualLeave;
+    balance.casualLeave.remaining = Math.max(0, policy.casualLeave - balance.casualLeave.used);
+
+    balance.vacationLeave.total = policy.vacationLeave;
+    balance.vacationLeave.remaining = Math.max(0, policy.vacationLeave - balance.vacationLeave.used);
   }
 
   /**
-   * Get or create leave balance for user/year
+   * Get or create leave balance for user/year (totals from org settings.leavePolicy)
    */
   private async getOrCreateLeaveBalance(userId: string, year: number, organizationId: string) {
     if (!organizationId) {
       throw new Error('Organization context is required for leave balance');
     }
 
+    const policy = await getOrganizationLeavePolicy(organizationId);
     let balance = await LeaveBalance.findOne({ userId, year, organizationId });
 
     if (!balance) {
-      // Create initial balance with default allocations
       balance = await LeaveBalance.create({
         userId,
         year,
         organizationId,
-        sickLeave: { total: 10, used: 0, remaining: 10 },
-        casualLeave: { total: 12, used: 0, remaining: 12 },
-        vacationLeave: { total: 15, used: 0, remaining: 15 },
+        sickLeave: { total: policy.sickLeave, used: 0, remaining: policy.sickLeave },
+        casualLeave: { total: policy.casualLeave, used: 0, remaining: policy.casualLeave },
+        vacationLeave: { total: policy.vacationLeave, used: 0, remaining: policy.vacationLeave },
         unpaidLeave: { used: 0 },
       });
+      return balance;
+    }
+
+    const policyChanged =
+      balance.sickLeave.total !== policy.sickLeave ||
+      balance.casualLeave.total !== policy.casualLeave ||
+      balance.vacationLeave.total !== policy.vacationLeave;
+
+    if (policyChanged) {
+      this.applyLeavePolicyTotals(balance, policy);
+      await balance.save();
     }
 
     return balance;
+  }
+
+  private async assertSupervisorCanActOnLeave(
+    leave: ILeave,
+    reviewerId: string,
+    reviewerRole: string,
+    action: 'approve' | 'reject'
+  ): Promise<void> {
+    if (reviewerRole !== UserRole.SUPERVISOR) {
+      return;
+    }
+
+    const employee = await User.findById(leave.userId).select('supervisorId organizationId');
+    if (!employee) {
+      throw new Error('Leave request employee not found');
+    }
+
+    if (employee.organizationId?.toString() !== leave.organizationId.toString()) {
+      throw new Error('Leave request is outside your organization');
+    }
+
+    if (employee.supervisorId?.toString() !== reviewerId) {
+      throw new Error(`You can only ${action} leave requests for your direct reports`);
+    }
   }
 
   /**
@@ -77,8 +122,8 @@ export class LeaveService {
       throw new Error('End date must be greater than or equal to start date');
     }
 
-    // Calculate working days
-    const totalDays = this.calculateWorkingDays(start, end);
+    // Calculate working days per org calendar (weekly off + holidays)
+    const totalDays = await countOrganizationWorkingDaysInRange(organizationId, start, end);
 
     if (totalDays === 0) {
       throw new Error('Leave request must include at least one working day');
@@ -379,6 +424,7 @@ export class LeaveService {
   async approveLeave(
     leaveId: string,
     reviewerId: string,
+    reviewerRole: string,
     notes?: string
   ): Promise<ILeave> {
     const leave = await Leave.findById(leaveId);
@@ -391,6 +437,8 @@ export class LeaveService {
       throw new Error('Leave request is not pending');
     }
 
+    await this.assertSupervisorCanActOnLeave(leave, reviewerId, reviewerRole, 'approve');
+
     // Update leave balance
     const year = leave.startDate.getFullYear();
     const balance = await this.getOrCreateLeaveBalance(
@@ -398,6 +446,13 @@ export class LeaveService {
       year,
       leave.organizationId.toString()
     );
+
+    if (
+      leave.leaveType !== LeaveType.UNPAID &&
+      !this.checkBalance(balance, leave.leaveType, leave.totalDays)
+    ) {
+      throw new Error(`Insufficient ${leave.leaveType} leave balance`);
+    }
     
     if (leave.leaveType === LeaveType.UNPAID) {
       balance.unpaidLeave.used += leave.totalDays;
@@ -414,11 +469,19 @@ export class LeaveService {
 
     await balance.save();
 
-    // Mark attendance as ON_LEAVE for the leave period
+    const organizationId = leave.organizationId.toString();
+    const weeklyOffPattern = await getOrganizationWeeklyOffPattern(organizationId);
+    const holidayDateKeys = await getNonWorkingHolidayDateKeys(
+      organizationId,
+      leave.startDate,
+      leave.endDate
+    );
+
+    // Mark attendance as ON_LEAVE for org working days in the leave period
     const leaveDays = eachDayOfInterval({
       start: leave.startDate,
       end: leave.endDate,
-    }).filter((day) => !isWeekend(day));
+    }).filter((day) => isOrgWorkingDay(day, weeklyOffPattern, holidayDateKeys));
 
     for (const day of leaveDays) {
       const dayStart = startOfDay(day);
@@ -426,6 +489,7 @@ export class LeaveService {
       // Check if attendance record exists
       const existingAttendance = await Attendance.findOne({
         userId: leave.userId,
+        organizationId,
         date: dayStart,
       });
 
@@ -437,6 +501,7 @@ export class LeaveService {
         // Create new attendance record
         await Attendance.create({
           userId: leave.userId,
+          organizationId,
           date: dayStart,
           status: AttendanceStatus.ON_LEAVE,
           isApproved: true,
@@ -461,6 +526,7 @@ export class LeaveService {
   async rejectLeave(
     leaveId: string,
     reviewerId: string,
+    reviewerRole: string,
     notes: string
   ): Promise<ILeave> {
     const leave = await Leave.findById(leaveId);
@@ -472,6 +538,8 @@ export class LeaveService {
     if (leave.status !== LeaveStatus.PENDING) {
       throw new Error('Leave request is not pending');
     }
+
+    await this.assertSupervisorCanActOnLeave(leave, reviewerId, reviewerRole, 'reject');
 
     leave.status = LeaveStatus.REJECTED;
     leave.reviewedBy = reviewerId as any;

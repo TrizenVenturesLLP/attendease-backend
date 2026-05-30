@@ -7,7 +7,7 @@
 
 import crypto from 'crypto';
 import mongoose from 'mongoose';
-import User, { IUser, UserRole } from '../models/User';
+import User, { AuthProvider, IUser, UserRole } from '../models/User';
 import Organization from '../models/Organization';
 import Department from '../models/Department';
 import {

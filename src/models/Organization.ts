@@ -18,8 +18,19 @@ export interface LeavePolicy {
   vacationLeave: number;
 }
 
+export enum WeeklyOffPattern {
+  MON_FRI = 'mon_fri',
+  MON_SAT = 'mon_sat',
+  SECOND_FOURTH_SAT = 'second_fourth_sat',
+}
+
+export interface WorkingDaysConfig {
+  weeklyOffPattern: WeeklyOffPattern;
+}
+
 export interface OrganizationSettings {
   workingHours: WorkingHours;
+  workingDays: WorkingDaysConfig;
   leavePolicy: LeavePolicy;
   timezone: string; // e.g., "Asia/Kolkata"
   fiscalYearStart: number; // Month number (1-12)
@@ -66,6 +77,18 @@ const WorkingHoursSchema = new Schema<WorkingHours>(
   { _id: false }
 );
 
+const WorkingDaysConfigSchema = new Schema<WorkingDaysConfig>(
+  {
+    weeklyOffPattern: {
+      type: String,
+      enum: Object.values(WeeklyOffPattern),
+      default: WeeklyOffPattern.MON_FRI,
+      required: true,
+    },
+  },
+  { _id: false }
+);
+
 const LeavePolicySchema = new Schema<LeavePolicy>(
   {
     sickLeave: {
@@ -96,6 +119,11 @@ const OrganizationSettingsSchema = new Schema<OrganizationSettings>(
       type: WorkingHoursSchema,
       required: true,
       default: () => ({ startTime: '09:00', endTime: '18:00' }),
+    },
+    workingDays: {
+      type: WorkingDaysConfigSchema,
+      required: true,
+      default: () => ({ weeklyOffPattern: WeeklyOffPattern.MON_FRI }),
     },
     leavePolicy: {
       type: LeavePolicySchema,

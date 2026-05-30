@@ -1,7 +1,14 @@
 import Attendance, { AttendanceStatus } from '../models/Attendance';
-import User from '../models/User';
+import Leave, { LeaveStatus } from '../models/Leave';
+import User, { UserRole } from '../models/User';
 import { startOfDay, endOfDay } from 'date-fns';
 import { minioStorage } from '../utils/storage/MinIOStorage';
+import { getOrganizationWorkingHours, parseTimeOnDate } from '../utils/organizationSettings';
+import {
+  getNonWorkingHolidayDateKeys,
+  getOrganizationWeeklyOffPattern,
+  isOrgWorkingDay,
+} from '../utils/workingDays';
 
 export class AttendanceService {
   /**
@@ -22,8 +29,8 @@ export class AttendanceService {
     }
 
     const now = new Date();
-    const workStartTime = new Date(today);
-    workStartTime.setHours(9, 0, 0); // 9:00 AM
+    const workingHours = await getOrganizationWorkingHours(organizationId);
+    const workStartTime = parseTimeOnDate(today, workingHours.startTime);
 
     // Determine status based on check-in time
     const status = now > workStartTime ? AttendanceStatus.LATE : AttendanceStatus.PRESENT;
@@ -258,6 +265,71 @@ export class AttendanceService {
         pages: Math.ceil(total / limit),
       },
     };
+  }
+
+  /**
+   * Mark absent for active users on a working day with no punch, leave, or existing record.
+   */
+  async markAutoAbsent(
+    organizationId: string,
+    targetDate: Date
+  ): Promise<{ marked: number; skipped: number; notWorkingDay: boolean }> {
+    const date = startOfDay(targetDate);
+    const today = startOfDay(new Date());
+
+    if (date >= today) {
+      throw new Error('Auto absent can only be run for past dates');
+    }
+
+    const weeklyOffPattern = await getOrganizationWeeklyOffPattern(organizationId);
+    const holidayDateKeys = await getNonWorkingHolidayDateKeys(organizationId, date, date);
+
+    if (!isOrgWorkingDay(date, weeklyOffPattern, holidayDateKeys)) {
+      return { marked: 0, skipped: 0, notWorkingDay: true };
+    }
+
+    const users = await User.find({
+      organizationId,
+      isActive: true,
+      role: {
+        $in: [UserRole.EMPLOYEE, UserRole.SUPERVISOR, UserRole.HR, UserRole.ADMIN],
+      },
+    }).select('_id');
+
+    let marked = 0;
+    let skipped = 0;
+
+    for (const user of users) {
+      const userId = user._id.toString();
+      const existing = await Attendance.findOne({ organizationId, userId, date });
+      if (existing) {
+        skipped += 1;
+        continue;
+      }
+
+      const onApprovedLeave = await Leave.exists({
+        organizationId,
+        userId,
+        status: LeaveStatus.APPROVED,
+        startDate: { $lte: endOfDay(date) },
+        endDate: { $gte: date },
+      });
+      if (onApprovedLeave) {
+        skipped += 1;
+        continue;
+      }
+
+      await Attendance.create({
+        organizationId,
+        userId,
+        date,
+        status: AttendanceStatus.ABSENT,
+        isApproved: true,
+      });
+      marked += 1;
+    }
+
+    return { marked, skipped, notWorkingDay: false };
   }
 }
 

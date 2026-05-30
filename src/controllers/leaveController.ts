@@ -306,9 +306,10 @@ export class LeaveController {
     try {
       const { id } = req.params;
       const reviewerId = req.user!.userId;
+      const reviewerRole = req.user!.role;
       const { notes } = req.body;
 
-      const leave = await leaveService.approveLeave(id, reviewerId, notes);
+      const leave = await leaveService.approveLeave(id, reviewerId, reviewerRole, notes);
 
       res.status(200).json({
         success: true,
@@ -332,6 +333,7 @@ export class LeaveController {
     try {
       const { id } = req.params;
       const reviewerId = req.user!.userId;
+      const reviewerRole = req.user!.role;
       const { notes } = req.body;
 
       if (!notes) {
@@ -343,7 +345,7 @@ export class LeaveController {
         return;
       }
 
-      const leave = await leaveService.rejectLeave(id, reviewerId, notes);
+      const leave = await leaveService.rejectLeave(id, reviewerId, reviewerRole, notes);
 
       res.status(200).json({
         success: true,

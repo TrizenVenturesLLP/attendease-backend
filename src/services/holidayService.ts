@@ -1,5 +1,6 @@
 import Holiday, { IHoliday, HolidayType } from '../models/Holiday';
 import { startOfDay, endOfDay } from 'date-fns';
+import { expandHolidaysInRange } from '../utils/workingDays';
 
 export class HolidayService {
   /**
@@ -131,15 +132,40 @@ export class HolidayService {
   }
 
   /**
-   * Check if a specific date is a holiday
+   * Check if a specific date is a non-working holiday (national/company; includes recurring)
    */
   async isHoliday(date: Date, organizationId: string): Promise<IHoliday | null> {
-    const holiday = await Holiday.findOne({
+    const target = startOfDay(date);
+
+    const direct = await Holiday.findOne({
       organizationId,
-      date: startOfDay(date),
+      date: target,
+      type: { $in: [HolidayType.NATIONAL, HolidayType.COMPANY] },
     }).lean();
 
-    return holiday;
+    if (direct) {
+      return direct;
+    }
+
+    const recurringHolidays = await Holiday.find({
+      organizationId,
+      isRecurring: true,
+      type: { $in: [HolidayType.NATIONAL, HolidayType.COMPANY] },
+    }).lean();
+
+    const expanded = expandHolidaysInRange(recurringHolidays, target, target);
+    if (expanded.length === 0) {
+      return null;
+    }
+
+    const month = target.getMonth();
+    const day = target.getDate();
+    const match = recurringHolidays.find((holiday) => {
+      const template = new Date(holiday.date);
+      return template.getMonth() === month && template.getDate() === day;
+    });
+
+    return match ?? null;
   }
 
   /**

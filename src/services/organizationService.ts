@@ -304,6 +304,12 @@ class OrganizationService {
           ...data.settings.workingHours,
         };
       }
+      if (data.settings.workingDays) {
+        organization.settings.workingDays = {
+          ...organization.settings.workingDays,
+          ...data.settings.workingDays,
+        };
+      }
       if (data.settings.leavePolicy) {
         organization.settings.leavePolicy = {
           ...organization.settings.leavePolicy,

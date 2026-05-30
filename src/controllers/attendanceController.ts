@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import { attendanceService } from '../services/attendanceService';
 import { AttendanceStatus } from '../models/Attendance';
+import User, { UserRole } from '../models/User';
 
 export class AttendanceController {
   /**
@@ -185,6 +186,22 @@ export class AttendanceController {
       const { userId } = req.params;
       const { startDate, endDate, page, limit } = req.query;
 
+      if (req.user!.role === UserRole.SUPERVISOR) {
+        const targetUser = await User.findOne({
+          _id: userId,
+          organizationId: req.organizationId,
+        }).select('supervisorId');
+
+        if (!targetUser || targetUser.supervisorId?.toString() !== req.user!.userId) {
+          res.status(403).json({
+            success: false,
+            error: 'You can only view attendance for your direct reports',
+            timestamp: new Date().toISOString(),
+          });
+          return;
+        }
+      }
+
       const result = await attendanceService.getUserAttendance(
         userId,
         req.organizationId!,
@@ -205,6 +222,40 @@ export class AttendanceController {
       res.status(500).json({
         success: false,
         error: error.message || 'Failed to get attendance',
+        timestamp: new Date().toISOString(),
+      });
+    }
+  }
+
+  /**
+   * Mark auto-absent for a past working day (Admin/HR)
+   */
+  async markAutoAbsent(req: Request, res: Response): Promise<void> {
+    try {
+      const dateParam = req.body.date || req.query.date;
+      const targetDate = dateParam ? new Date(dateParam as string) : new Date(Date.now() - 86400000);
+
+      const result = await attendanceService.markAutoAbsent(req.organizationId!, targetDate);
+
+      if (result.notWorkingDay) {
+        res.status(400).json({
+          success: false,
+          error: 'Selected date is not a working day for this organization',
+          timestamp: new Date().toISOString(),
+        });
+        return;
+      }
+
+      res.status(200).json({
+        success: true,
+        message: `Marked ${result.marked} employee(s) as absent`,
+        data: result,
+        timestamp: new Date().toISOString(),
+      });
+    } catch (error: any) {
+      res.status(400).json({
+        success: false,
+        error: error.message || 'Failed to mark auto absent',
         timestamp: new Date().toISOString(),
       });
     }
