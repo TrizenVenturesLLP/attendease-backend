@@ -32,17 +32,17 @@ router.get(
 );
 router.get(
   '/regularization/pending',
-  authorize(UserRole.SUPERVISOR, UserRole.HR, UserRole.ADMIN, UserRole.SUPER_ADMIN),
+  authorize(UserRole.HR, UserRole.ADMIN, UserRole.SUPER_ADMIN),
   attendanceRegularizationController.getPendingRequests.bind(attendanceRegularizationController)
 );
 router.patch(
   '/regularization/:id/approve',
-  authorize(UserRole.SUPERVISOR, UserRole.HR, UserRole.ADMIN, UserRole.SUPER_ADMIN),
+  authorize(UserRole.HR, UserRole.ADMIN, UserRole.SUPER_ADMIN),
   attendanceRegularizationController.approveRequest.bind(attendanceRegularizationController)
 );
 router.patch(
   '/regularization/:id/reject',
-  authorize(UserRole.SUPERVISOR, UserRole.HR, UserRole.ADMIN, UserRole.SUPER_ADMIN),
+  authorize(UserRole.HR, UserRole.ADMIN, UserRole.SUPER_ADMIN),
   attendanceRegularizationController.rejectRequest.bind(attendanceRegularizationController)
 );
 

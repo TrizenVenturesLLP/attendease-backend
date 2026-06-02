@@ -7,10 +7,18 @@ export enum RegularizationStatus {
   REJECTED = 'rejected',
 }
 
+export enum RegularizationRequestType {
+  MISSED_CHECK_IN = 'missed_check_in',
+  MISSED_CHECK_OUT = 'missed_check_out',
+  INCORRECT_TIMING = 'incorrect_timing',
+  ATTENDANCE_CORRECTION = 'attendance_correction',
+}
+
 export interface IAttendanceRegularization extends Document {
   organizationId: mongoose.Types.ObjectId;
   userId: mongoose.Types.ObjectId;
   date: Date;
+  requestType: RegularizationRequestType;
   requestedCheckIn?: Date;
   requestedCheckOut?: Date;
   requestedStatus: AttendanceStatus;
@@ -41,6 +49,12 @@ const AttendanceRegularizationSchema = new Schema<IAttendanceRegularization>(
       type: Date,
       required: true,
       index: true,
+    },
+    requestType: {
+      type: String,
+      enum: Object.values(RegularizationRequestType),
+      default: RegularizationRequestType.ATTENDANCE_CORRECTION,
+      required: true,
     },
     requestedCheckIn: Date,
     requestedCheckOut: Date,
