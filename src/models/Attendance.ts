@@ -19,7 +19,8 @@ export interface IAttendance extends Document {
   notes?: string;
   isApproved: boolean;
   approvedBy?: mongoose.Types.ObjectId;
-  photoUrl?: string; // Photo URL from MinIO storage
+  photoUrl?: string; // Presigned or legacy public URL for clients
+  photoKey?: string; // MinIO object key in check-in bucket
   createdAt: Date;
   updatedAt: Date;
 }
@@ -73,6 +74,10 @@ const AttendanceSchema = new Schema<IAttendance>(
     },
     photoUrl: {
       type: String,
+    },
+    photoKey: {
+      type: String,
+      trim: true,
     },
   },
   {

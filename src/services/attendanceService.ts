@@ -2,13 +2,34 @@ import Attendance, { AttendanceStatus } from '../models/Attendance';
 import Leave, { LeaveStatus } from '../models/Leave';
 import User, { UserRole } from '../models/User';
 import { startOfDay, endOfDay } from 'date-fns';
-import { minioStorage } from '../utils/storage/MinIOStorage';
+import { checkInMinioStorage } from '../utils/storage/MinIOStorage';
 import { getOrganizationWorkingHours, parseTimeOnDate } from '../utils/organizationSettings';
 import {
   getNonWorkingHolidayDateKeys,
   getOrganizationWeeklyOffPattern,
   isOrgWorkingDay,
 } from '../utils/workingDays';
+
+const CHECKIN_PHOTO_TTL_SEC = 86400;
+
+async function enrichAttendancePhoto<T extends Record<string, unknown>>(record: T | null): Promise<T | null> {
+  if (!record) return record;
+
+  const key = record.photoKey as string | undefined;
+  if (!key) return record;
+
+  try {
+    const photoUrl = await checkInMinioStorage.getPresignedUrl(key, CHECKIN_PHOTO_TTL_SEC);
+    return { ...record, photoUrl, hasCheckInPhoto: true };
+  } catch (error) {
+    console.warn('Could not generate check-in photo URL:', (error as Error).message);
+    return record;
+  }
+}
+
+async function enrichAttendancePhotos<T extends Record<string, unknown>>(records: T[]): Promise<T[]> {
+  return Promise.all(records.map(r => enrichAttendancePhoto(r).then(x => x ?? r)));
+}
 
 export class AttendanceService {
   /**
@@ -36,34 +57,36 @@ export class AttendanceService {
     const status = now > workStartTime ? AttendanceStatus.LATE : AttendanceStatus.PRESENT;
 
     // Upload photo to MinIO if provided
-    let photoUrl: string | undefined;
+    let photoKey: string | undefined;
     if (photoData) {
       try {
         // Convert base64 to buffer
         const base64Data = photoData.replace(/^data:image\/\w+;base64,/, '');
         const imageBuffer = Buffer.from(base64Data, 'base64');
-        
-        // Create folder structure: attendance-photos/YYYY/MM/DD
+
+        const maxSize = 5 * 1024 * 1024;
+        if (imageBuffer.length > maxSize) {
+          throw new Error('Check-in photo must be under 5MB');
+        }
+
         const year = now.getFullYear();
         const month = String(now.getMonth() + 1).padStart(2, '0');
         const day = String(now.getDate()).padStart(2, '0');
-        const folder = `attendance-photos/${year}/${month}/${day}`;
-        
-        // Upload to MinIO
+        const folder = `org-${organizationId}/${year}/${month}/${day}`;
+
         const fileName = `${userId}_checkin_${now.getTime()}.jpg`;
-        const result = await minioStorage.uploadFile(
+        const result = await checkInMinioStorage.uploadFile(
           imageBuffer,
           fileName,
           'image/jpeg',
           folder,
           { userId, type: 'checkin', date: today.toISOString() }
         );
-        
-        photoUrl = result.url;
+
+        photoKey = result.key;
       } catch (uploadError: any) {
-        console.error('Failed to upload photo:', uploadError.message);
-        // Don't fail check-in if photo upload fails
-        photoUrl = undefined;
+        console.error('Failed to upload check-in photo:', uploadError.message);
+        photoKey = undefined;
       }
     }
 
@@ -73,10 +96,10 @@ export class AttendanceService {
       date: today,
       checkIn: now,
       status,
-      photoUrl,
+      photoKey,
     });
 
-    return attendance;
+    return enrichAttendancePhoto(attendance.toObject() as unknown as Record<string, unknown>);
   }
 
   /**
@@ -117,7 +140,9 @@ export class AttendanceService {
       date: today,
     });
 
-    return attendance;
+    return enrichAttendancePhoto(
+      attendance ? (attendance.toObject() as unknown as Record<string, unknown>) : null,
+    );
   }
 
   /**
@@ -156,7 +181,7 @@ export class AttendanceService {
     ]);
 
     return {
-      records,
+      records: await enrichAttendancePhotos(records as unknown as Record<string, unknown>[]),
       pagination: {
         total,
         page,
@@ -257,7 +282,7 @@ export class AttendanceService {
     ]);
 
     return {
-      records,
+      records: await enrichAttendancePhotos(records as unknown as Record<string, unknown>[]),
       pagination: {
         total,
         page,

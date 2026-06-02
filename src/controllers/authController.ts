@@ -221,6 +221,79 @@ class AuthController {
   }
 
   /**
+   * @route   GET /api/auth/me/profile-photo
+   * @desc    Download current user's profile photo
+   * @access  Private
+   */
+  async getProfilePhoto(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      if (!req.user) {
+        throw new BadRequestError('User not authenticated');
+      }
+
+      const { buffer, contentType } = await authService.getProfilePhotoBuffer(req.user.userId);
+      res.set('Content-Type', contentType);
+      res.set('Cache-Control', 'private, max-age=300');
+      res.send(buffer);
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  /**
+   * @route   POST /api/auth/me/profile-photo
+   * @desc    Upload or replace profile photo
+   * @access  Private
+   */
+  async updateProfilePhoto(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      if (!req.user) {
+        throw new BadRequestError('User not authenticated');
+      }
+
+      const { photoData } = req.body;
+      const user = await authService.updateProfilePhoto(req.user.userId, photoData);
+
+      const response: ApiResponse<typeof user> = {
+        success: true,
+        message: 'Profile photo updated',
+        data: user,
+        timestamp: new Date().toISOString(),
+      };
+
+      res.status(200).json(response);
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  /**
+   * @route   DELETE /api/auth/me/profile-photo
+   * @desc    Remove profile photo
+   * @access  Private
+   */
+  async removeProfilePhoto(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      if (!req.user) {
+        throw new BadRequestError('User not authenticated');
+      }
+
+      const user = await authService.removeProfilePhoto(req.user.userId);
+
+      const response: ApiResponse<typeof user> = {
+        success: true,
+        message: 'Profile photo removed',
+        data: user,
+        timestamp: new Date().toISOString(),
+      };
+
+      res.status(200).json(response);
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  /**
    * @route   POST /api/auth/logout
    * @desc    Logout user (client-side token removal)
    * @access  Private

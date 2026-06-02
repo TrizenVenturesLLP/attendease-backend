@@ -13,6 +13,7 @@ import {
   ForbiddenError,
 } from '../utils/AppError';
 import { JwtPayload } from '../utils/ApiResponse';
+import { profileMinioStorage } from '../utils/storage/MinIOStorage';
 
 export interface ClientUser {
   id: string;
@@ -33,6 +34,8 @@ export interface ClientUser {
   employeeId?: string;
   authProvider?: string;
   isActive?: boolean;
+  profilePhotoUrl?: string;
+  hasProfilePhoto?: boolean;
 }
 
 export interface LoginResult {
@@ -237,6 +240,19 @@ class AuthService {
       }
     }
 
+    const profilePhotoKey = (user as IUser).profilePhotoKey;
+    if (profilePhotoKey) {
+      clientUser.hasProfilePhoto = true;
+      try {
+        clientUser.profilePhotoUrl = await profileMinioStorage.getPresignedUrl(
+          profilePhotoKey,
+          86400
+        );
+      } catch (error) {
+        console.warn('Could not generate profile photo URL:', (error as Error).message);
+      }
+    }
+
     return clientUser;
   }
 
@@ -359,6 +375,91 @@ class AuthService {
     }
 
     return this.formatClientUser(user as unknown as IUser);
+  }
+
+  /**
+   * Upload or replace the current user's profile photo.
+   */
+  async updateProfilePhoto(userId: string, photoData: string): Promise<ClientUser> {
+    if (!photoData?.trim()) {
+      throw new BadRequestError('Photo data is required');
+    }
+
+    const user = await User.findById(userId);
+    if (!user) {
+      throw new NotFoundError('User not found');
+    }
+
+    const base64Data = photoData.replace(/^data:image\/\w+;base64,/, '');
+    if (!base64Data) {
+      throw new BadRequestError('Invalid photo data');
+    }
+
+    const imageBuffer = Buffer.from(base64Data, 'base64');
+    const maxSize = 5 * 1024 * 1024;
+    if (imageBuffer.length > maxSize) {
+      throw new BadRequestError('Photo must be under 5MB');
+    }
+
+    const orgPart = user.organizationId ? `org-${user.organizationId}` : 'platform';
+    const folder = `${orgPart}/users/${userId}`;
+    const fileName = `profile_${Date.now()}.jpg`;
+
+    if (user.profilePhotoKey) {
+      try {
+        await profileMinioStorage.deleteFile(user.profilePhotoKey);
+      } catch (error) {
+        console.warn('Could not delete old profile photo:', (error as Error).message);
+      }
+    }
+
+    const result = await profileMinioStorage.uploadFile(
+      imageBuffer,
+      fileName,
+      'image/jpeg',
+      folder,
+      { userId, type: 'profile' }
+    );
+
+    user.profilePhotoKey = result.key;
+    await user.save();
+
+    return this.formatClientUser(user);
+  }
+
+  /**
+   * Stream profile photo bytes for authenticated clients (mobile app).
+   */
+  async getProfilePhotoBuffer(userId: string): Promise<{ buffer: Buffer; contentType: string }> {
+    const user = await User.findById(userId).select('profilePhotoKey');
+    if (!user?.profilePhotoKey) {
+      throw new NotFoundError('Profile photo not found');
+    }
+
+    return profileMinioStorage.getObjectBuffer(user.profilePhotoKey);
+  }
+
+  /**
+   * Remove the current user's profile photo.
+   */
+  async removeProfilePhoto(userId: string): Promise<ClientUser> {
+    const user = await User.findById(userId);
+    if (!user) {
+      throw new NotFoundError('User not found');
+    }
+
+    if (user.profilePhotoKey) {
+      try {
+        await profileMinioStorage.deleteFile(user.profilePhotoKey);
+      } catch (error) {
+        console.warn('Could not delete profile photo:', (error as Error).message);
+      }
+    }
+
+    user.profilePhotoKey = undefined;
+    await user.save();
+
+    return this.formatClientUser(user);
   }
 
   /**
