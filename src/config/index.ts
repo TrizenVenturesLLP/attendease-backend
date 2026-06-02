@@ -60,6 +60,14 @@ interface Config {
     frontendProtocol: string;
   };
   microsoft: MicrosoftConfig;
+  minio: {
+    rootUser: string;
+    rootPassword: string;
+    regionName: string;
+    endpoint: string;
+    profileBucketName: string;
+    checkinBucketName: string;
+  };
 }
 
 const config: Config = {
@@ -128,6 +136,14 @@ const config: Config = {
     clientSecret: process.env.MICROSOFT_CLIENT_SECRET || '',
     redirectUri: process.env.MICROSOFT_REDIRECT_URI || 'http://localhost:3000/auth/microsoft/callback',
     authority: process.env.MICROSOFT_AUTHORITY || 'https://login.microsoftonline.com/common',
+  },
+  minio: {
+    rootUser: process.env.MINIO_ROOT_USER || '',
+    rootPassword: process.env.MINIO_ROOT_PASSWORD || '',
+    regionName: process.env.MINIO_REGION_NAME || 'us-east-1',
+    endpoint: process.env.MINIO_ENDPOINT || '',
+    profileBucketName: process.env.MINIO_PROFILE_BUCKET_NAME || 'profile-photos',
+    checkinBucketName: process.env.MINIO_CHECKIN_BUCKET_NAME || 'attendence-image-checkin',
   },
 };
 

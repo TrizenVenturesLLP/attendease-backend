@@ -44,6 +44,7 @@ export interface IUser extends Document {
   microsoftId?: string;
   resetPasswordToken?: string;
   resetPasswordExpires?: Date;
+  profilePicture?: string;
   createdAt: Date;
   updatedAt: Date;
   fullName: string;
@@ -161,6 +162,10 @@ const UserSchema = new Schema<IUser>(
     },
     platformPreferences: {
       type: PlatformPreferencesSchema,
+      required: false,
+    },
+    profilePicture: {
+      type: String,
       required: false,
     },
   },

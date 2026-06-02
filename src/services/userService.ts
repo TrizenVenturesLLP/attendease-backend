@@ -48,13 +48,7 @@ export interface UserFilters {
 }
 
 class UserService {
-  /** Frees email/employeeId on soft-delete so the same address can be invited again. */
-  private releaseDeletedUserIdentifiers(user: IUser): void {
-    user.isActive = false;
-    user.email = `deleted.${user._id.toString()}@removed.trizenhr`;
-    user.employeeId = undefined;
-    user.microsoftId = undefined;
-  }
+
 
   private async reactivateOrgUser(
     existing: IUser,
