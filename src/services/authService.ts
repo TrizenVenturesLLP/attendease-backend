@@ -36,6 +36,7 @@ export interface ClientUser {
   isActive?: boolean;
   profilePhotoUrl?: string;
   hasProfilePhoto?: boolean;
+  createdAt?: string;
 }
 
 export interface LoginResult {
@@ -224,6 +225,9 @@ class AuthService {
       employeeId: (user as IUser).employeeId,
       authProvider: (user as IUser).authProvider,
       isActive: (user as IUser).isActive,
+      createdAt: (user as IUser).createdAt
+        ? new Date((user as IUser).createdAt as Date).toISOString()
+        : undefined,
     };
 
     if (organizationId && role !== UserRole.SUPER_ADMIN) {

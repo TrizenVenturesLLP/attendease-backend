@@ -6,6 +6,10 @@ export enum AttendanceStatus {
   ABSENT = 'absent',
   HALF_DAY = 'half_day',
   ON_LEAVE = 'on_leave',
+  WEEKLY_OFF = 'weekly_off',
+  HOLIDAY = 'holiday',
+  NOT_JOINED = 'not_joined',
+  PRESENT_WITH_LATE = 'present_with_late',
 }
 
 export interface IAttendance extends Document {

@@ -2,11 +2,9 @@ import { Request, Response } from 'express';
 import { attendanceService } from '../services/attendanceService';
 import { AttendanceStatus } from '../models/Attendance';
 import User, { UserRole } from '../models/User';
+import { parseLocalDateInput } from '../utils/dateInput';
 
 export class AttendanceController {
-  /**
-   * Mark check-in
-   */
   async checkIn(req: Request, res: Response): Promise<void> {
     try {
       const userId = req.user!.userId;
@@ -33,13 +31,9 @@ export class AttendanceController {
     }
   }
 
-  /**
-   * Mark check-out
-   */
   async checkOut(req: Request, res: Response): Promise<void> {
     try {
       const userId = req.user!.userId;
-
       const attendance = await attendanceService.checkOut(userId, req.organizationId!);
 
       res.status(200).json({
@@ -57,13 +51,9 @@ export class AttendanceController {
     }
   }
 
-  /**
-   * Get today's attendance status
-   */
   async getTodayStatus(req: Request, res: Response): Promise<void> {
     try {
       const userId = req.user!.userId;
-
       const status = await attendanceService.getTodayStatus(userId, req.organizationId!);
 
       res.status(200).json({
@@ -80,9 +70,25 @@ export class AttendanceController {
     }
   }
 
-  /**
-   * Get user's attendance history
-   */
+  async getMyPolicy(req: Request, res: Response): Promise<void> {
+    try {
+      const userId = req.user!.userId;
+      const policy = await attendanceService.getMyPolicySummary(userId);
+
+      res.status(200).json({
+        success: true,
+        data: policy,
+        timestamp: new Date().toISOString(),
+      });
+    } catch (error: any) {
+      res.status(500).json({
+        success: false,
+        error: error.message || 'Failed to get policy summary',
+        timestamp: new Date().toISOString(),
+      });
+    }
+  }
+
   async getMyAttendance(req: Request, res: Response): Promise<void> {
     try {
       const userId = req.user!.userId;
@@ -91,8 +97,8 @@ export class AttendanceController {
       const result = await attendanceService.getUserAttendance(
         userId,
         req.organizationId!,
-        startDate ? new Date(startDate as string) : undefined,
-        endDate ? new Date(endDate as string) : undefined,
+        startDate ? parseLocalDateInput(startDate as string) : undefined,
+        endDate ? parseLocalDateInput(endDate as string) : undefined,
         status ? (status as AttendanceStatus) : undefined,
         page ? parseInt(page as string) : undefined,
         limit ? parseInt(limit as string) : undefined
@@ -113,9 +119,6 @@ export class AttendanceController {
     }
   }
 
-  /**
-   * Get user's attendance statistics
-   */
   async getMyStats(req: Request, res: Response): Promise<void> {
     try {
       const userId = req.user!.userId;
@@ -142,23 +145,34 @@ export class AttendanceController {
     }
   }
 
-  /**
-   * Get all attendance records (Admin/HR)
-   */
   async getAllAttendance(req: Request, res: Response): Promise<void> {
     try {
-      const { date, startDate, endDate, status, department, page, limit } = req.query;
+      const {
+        date,
+        startDate,
+        endDate,
+        status,
+        department,
+        attendancePolicyId,
+        shiftId,
+        dayType,
+        page,
+        limit,
+      } = req.query;
 
-      const filters: any = {};
+      const filters: Record<string, unknown> = {};
       if (date) filters.date = new Date(date as string);
-      if (startDate) filters.startDate = new Date(startDate as string);
-      if (endDate) filters.endDate = new Date(endDate as string);
+      if (startDate) filters.startDate = parseLocalDateInput(startDate as string);
+      if (endDate) filters.endDate = parseLocalDateInput(endDate as string);
       if (status) filters.status = status as AttendanceStatus;
       if (department) filters.department = department as string;
+      if (attendancePolicyId) filters.attendancePolicyId = attendancePolicyId as string;
+      if (shiftId) filters.shiftId = shiftId as string;
+      if (dayType) filters.dayType = dayType as string;
 
       const result = await attendanceService.getAllAttendance(
         req.organizationId!,
-        filters,
+        filters as any,
         page ? parseInt(page as string) : undefined,
         limit ? parseInt(limit as string) : undefined
       );
@@ -178,9 +192,6 @@ export class AttendanceController {
     }
   }
 
-  /**
-   * Get specific user's attendance (Admin/HR/Supervisor)
-   */
   async getUserAttendance(req: Request, res: Response): Promise<void> {
     try {
       const { userId } = req.params;
@@ -205,8 +216,8 @@ export class AttendanceController {
       const result = await attendanceService.getUserAttendance(
         userId,
         req.organizationId!,
-        startDate ? new Date(startDate as string) : undefined,
-        endDate ? new Date(endDate as string) : undefined,
+        startDate ? parseLocalDateInput(startDate as string) : undefined,
+        endDate ? parseLocalDateInput(endDate as string) : undefined,
         undefined,
         page ? parseInt(page as string) : undefined,
         limit ? parseInt(limit as string) : undefined
@@ -227,13 +238,12 @@ export class AttendanceController {
     }
   }
 
-  /**
-   * Mark auto-absent for a past working day (Admin/HR)
-   */
   async markAutoAbsent(req: Request, res: Response): Promise<void> {
     try {
       const dateParam = req.body.date || req.query.date;
-      const targetDate = dateParam ? new Date(dateParam as string) : new Date(Date.now() - 86400000);
+      const targetDate = dateParam
+        ? new Date(dateParam as string)
+        : new Date(Date.now() - 86400000);
 
       const result = await attendanceService.markAutoAbsent(req.organizationId!, targetDate);
 

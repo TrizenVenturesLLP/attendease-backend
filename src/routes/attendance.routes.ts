@@ -17,6 +17,7 @@ router.use(tenantContext, allowOrganizationOverride);
 router.post('/check-in', attendanceController.checkIn);
 router.post('/check-out', attendanceController.checkOut);
 router.get('/today', attendanceController.getTodayStatus);
+router.get('/my-policy', attendanceController.getMyPolicy);
 router.get('/my-attendance', attendanceController.getMyAttendance);
 router.get('/my-stats', attendanceController.getMyStats);
 

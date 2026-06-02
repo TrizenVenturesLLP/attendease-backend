@@ -115,6 +115,24 @@ router.patch(
   userController.assignSupervisor
 );
 
+router.patch(
+  '/:id/shift',
+  authorize(UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.HR),
+  userController.updateUserShift
+);
+
+router.patch(
+  '/:id/attendance-policy',
+  authorize(UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.HR),
+  userController.updateUserAttendancePolicy
+);
+
+router.patch(
+  '/:id/policies',
+  authorize(UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.HR),
+  userController.updateUserPolicies
+);
+
 /**
  * @route   POST /api/users/:id/resend-invitation
  * @desc    Resend invitation email
