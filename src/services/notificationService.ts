@@ -12,6 +12,7 @@ import PayrollRun, { PayrollRunStatus } from '../models/PayrollRun';
 import NotificationRead from '../models/NotificationRead';
 import { leaveService } from './leaveService';
 import { attendanceService } from './attendanceService';
+import { attendanceRegularizationService } from './attendanceRegularizationService';
 import { REQUEST_TYPE_LABELS } from '../utils/attendanceRegularizationValidation';
 
 export type NotificationItemType =
@@ -195,14 +196,8 @@ export class NotificationService {
 
       // Pending attendance regularizations (HR / Admin only)
       if (role === UserRole.ADMIN || role === UserRole.HR) {
-        const pendingRegularizations = await AttendanceRegularization.find({
-          organizationId: orgId,
-          status: RegularizationStatus.PENDING,
-        })
-          .populate('userId', 'firstName lastName email')
-          .sort({ createdAt: -1 })
-          .limit(20)
-          .lean();
+        const pendingRegularizations =
+          await attendanceRegularizationService.getPendingForNotifications(orgId, role, 20);
 
         for (const row of pendingRegularizations) {
           const u = row.userId as { firstName?: string; lastName?: string; email?: string };

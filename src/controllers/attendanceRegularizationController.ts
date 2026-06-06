@@ -88,13 +88,19 @@ export class AttendanceRegularizationController {
     try {
       const page = req.query.page ? parseInt(req.query.page as string, 10) : 1;
       const limit = req.query.limit ? parseInt(req.query.limit as string, 10) : 50;
+      const statusParam = req.query.status as RegularizationStatus | undefined;
+      const status =
+        statusParam && Object.values(RegularizationStatus).includes(statusParam)
+          ? statusParam
+          : RegularizationStatus.PENDING;
 
       const result = await attendanceRegularizationService.getPendingRequests(
         req.organizationId!,
         req.user!.userId,
         req.user!.role,
         page,
-        limit
+        limit,
+        status
       );
 
       res.status(200).json({

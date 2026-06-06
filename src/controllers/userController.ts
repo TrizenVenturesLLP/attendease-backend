@@ -20,8 +20,10 @@ class UserController {
       }
 
       let organizationId = req.organizationId || req.body.organizationId;
-      if (req.body.role !== UserRole.SUPER_ADMIN) {
+      if (req.body.role !== UserRole.SUPER_ADMIN && !organizationId) {
         organizationId = await resolveOrganizationId(req);
+      } else if (organizationId && !req.organizationId) {
+        req.organizationId = organizationId;
       }
 
       const userData: CreateUserData = {
