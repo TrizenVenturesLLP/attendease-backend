@@ -40,3 +40,11 @@ export function buildSetPasswordBaseUrl(subdomain?: string | null): string {
   }
   return config.invitation.baseUrl;
 }
+
+export function buildDemoInviteLink(rawToken: string, subdomain?: string | null): string {
+  const base = buildSetPasswordBaseUrl(subdomain);
+  const url = new URL(base);
+  url.searchParams.set('token', rawToken);
+  url.searchParams.set('flow', 'demo');
+  return url.toString();
+}

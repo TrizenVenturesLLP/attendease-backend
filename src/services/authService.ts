@@ -14,6 +14,7 @@ import {
 } from '../utils/AppError';
 import { JwtPayload } from '../utils/ApiResponse';
 import { profileMinioStorage } from '../utils/storage/MinIOStorage';
+import demoInvitationService from './demoInvitationService';
 
 export interface ClientUser {
   id: string;
@@ -93,6 +94,28 @@ class AuthService {
 
     if (!isPasswordValid) {
       throw new UnauthorizedError('Invalid email or password');
+    }
+
+    if (user.demoAccessExpiresAt && user.demoAccessExpiresAt < new Date()) {
+      throw new UnauthorizedError(
+        'Your demo access has expired. Contact Trizen HR for an extension.'
+      );
+    }
+
+    if (user.organizationId) {
+      const org = await Organization.findById(user.organizationId).select(
+        'isDemoTenant demoExpiresAt isActive name subdomain'
+      );
+      if (org?.isDemoTenant) {
+        if (!org.isActive) {
+          throw new UnauthorizedError('This demo environment is no longer available.');
+        }
+        const isSharedDemoOrg =
+          org.subdomain?.toLowerCase() === 'demoorg' || org.name === 'DemoOrg';
+        if (!isSharedDemoOrg && org.demoExpiresAt && org.demoExpiresAt < new Date()) {
+          throw new UnauthorizedError('This demo environment has expired.');
+        }
+      }
     }
 
     const token = this.generateToken(user);
@@ -282,13 +305,27 @@ class AuthService {
   }
 
   /**
-   * Accept invitation — set password for a pre-created org user
+   * Validate a demo invitation token (public — for set-password page).
+   */
+  async validateDemoInviteToken(rawToken: string) {
+    return demoInvitationService.validateToken(rawToken);
+  }
+
+  /**
+   * Accept invitation — set password for a pre-created org user, or via demo token.
    */
   async acceptInvitation(
-    email: string,
-    organizationId: string,
-    password: string
+    payload:
+      | { email: string; organizationId: string; password: string; token?: never }
+      | { token: string; password: string; email?: never; organizationId?: never }
   ): Promise<void> {
+    if ('token' in payload && payload.token) {
+      await demoInvitationService.acceptByToken(payload.token, payload.password);
+      return;
+    }
+
+    const { email, organizationId, password } = payload;
+
     if (!email || !organizationId || !password) {
       throw new BadRequestError('Email, organization ID, and password are required');
     }
