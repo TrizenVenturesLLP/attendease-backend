@@ -10,6 +10,7 @@ import dashboardRoutes from './dashboard.routes';
 import healthRoutes from './health.routes';
 import payrollRoutes from './payroll.routes';
 import notificationRoutes from './notification.routes';
+import attendancePolicyRoutes from './attendancePolicy.routes';
 
 const router = Router();
 
@@ -26,5 +27,6 @@ router.use('/organizations', organizationRoutes);
 router.use('/dashboard', dashboardRoutes);
 router.use('/payroll', payrollRoutes);
 router.use('/notifications', notificationRoutes);
+router.use('/attendance-policies', attendancePolicyRoutes);
 
 export default router;

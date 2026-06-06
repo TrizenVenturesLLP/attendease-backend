@@ -44,7 +44,7 @@ export function isWeeklyOff(date: Date, pattern: WeeklyOffPattern): boolean {
   }
 }
 
-function toDateKey(date: Date): string {
+export function toDateKey(date: Date): string {
   return startOfDay(date).toDateString();
 }
 

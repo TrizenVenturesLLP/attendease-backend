@@ -1,18 +1,57 @@
+import mongoose from 'mongoose';
 import Attendance, { AttendanceStatus } from '../models/Attendance';
+import AttendancePolicy, { IAttendancePolicy } from '../models/AttendancePolicy';
 import AttendanceRegularization, {
   IAttendanceRegularization,
+  RegularizationRequestType,
   RegularizationStatus,
 } from '../models/AttendanceRegularization';
-import User, { UserRole } from '../models/User';
+import User from '../models/User';
 import { startOfDay } from 'date-fns';
+import { attendancePolicyService } from './attendancePolicyService';
 import { parseTimeOnDate } from '../utils/organizationSettings';
+import { validateRegularizationPayload } from '../utils/attendanceRegularizationValidation';
 
 export interface CreateRegularizationInput {
   date: Date;
+  requestType: RegularizationRequestType;
   requestedCheckIn?: string;
   requestedCheckOut?: string;
-  requestedStatus: AttendanceStatus;
+  requestedStatus?: AttendanceStatus;
   reason: string;
+}
+
+export interface ApproveRegularizationOverrides {
+  requestedCheckIn?: string;
+  requestedCheckOut?: string;
+  requestedStatus?: AttendanceStatus;
+  notes?: string;
+}
+
+export type RegularizationStats = {
+  total: number;
+  pending: number;
+  approved: number;
+  rejected: number;
+};
+
+async function getUserPolicy(user: {
+  organizationId: { toString(): string };
+  attendancePolicyId?: { toString(): string };
+}): Promise<IAttendancePolicy | null> {
+  const organizationId = user.organizationId.toString();
+  let policy: IAttendancePolicy | null = user.attendancePolicyId
+    ? await AttendancePolicy.findOne({
+        _id: user.attendancePolicyId,
+        organizationId,
+        status: 'ACTIVE',
+      }).lean()
+    : null;
+
+  if (!policy) {
+    policy = await attendancePolicyService.getDefaultPolicy(organizationId);
+  }
+  return policy;
 }
 
 export class AttendanceRegularizationService {
@@ -23,11 +62,27 @@ export class AttendanceRegularizationService {
     return parseTimeOnDate(date, time);
   }
 
+  private async assertRegularizationAllowed(userId: string): Promise<void> {
+    const user = await User.findById(userId)
+      .select('organizationId attendancePolicyId')
+      .lean();
+    if (!user) {
+      throw new Error('User not found');
+    }
+
+    const policy = await getUserPolicy(user);
+    if (policy && policy.allowRegularization === false) {
+      throw new Error('Attendance regularization is not allowed under your attendance policy');
+    }
+  }
+
   async createRequest(
     userId: string,
     organizationId: string,
     input: CreateRegularizationInput
   ): Promise<IAttendanceRegularization> {
+    await this.assertRegularizationAllowed(userId);
+
     const date = startOfDay(input.date);
     const today = startOfDay(new Date());
 
@@ -35,14 +90,20 @@ export class AttendanceRegularizationService {
       throw new Error('Cannot request regularization for a future date');
     }
 
-    const allowedStatuses = [
-      AttendanceStatus.PRESENT,
-      AttendanceStatus.LATE,
-      AttendanceStatus.HALF_DAY,
-    ];
-    if (!allowedStatuses.includes(input.requestedStatus)) {
-      throw new Error('Invalid requested attendance status');
+    if (!input.reason?.trim()) {
+      throw new Error('Reason is required');
     }
+
+    if (!Object.values(RegularizationRequestType).includes(input.requestType)) {
+      throw new Error('Invalid regularization request type');
+    }
+
+    const { requestedStatus } = validateRegularizationPayload({
+      requestType: input.requestType,
+      requestedCheckIn: input.requestedCheckIn,
+      requestedCheckOut: input.requestedCheckOut,
+      requestedStatus: input.requestedStatus,
+    });
 
     const existingPending = await AttendanceRegularization.findOne({
       organizationId,
@@ -58,9 +119,10 @@ export class AttendanceRegularizationService {
       organizationId,
       userId,
       date,
+      requestType: input.requestType,
       requestedCheckIn: this.parseRequestedTime(date, input.requestedCheckIn),
       requestedCheckOut: this.parseRequestedTime(date, input.requestedCheckOut),
-      requestedStatus: input.requestedStatus,
+      requestedStatus,
       reason: input.reason.trim(),
       status: RegularizationStatus.PENDING,
     });
@@ -68,34 +130,76 @@ export class AttendanceRegularizationService {
     return request;
   }
 
+  private async computeStats(
+    organizationId: string,
+    userId: string
+  ): Promise<RegularizationStats> {
+    const rows = await AttendanceRegularization.aggregate([
+      {
+        $match: {
+          organizationId: new mongoose.Types.ObjectId(organizationId),
+          userId: new mongoose.Types.ObjectId(userId),
+        },
+      },
+      { $group: { _id: '$status', count: { $sum: 1 } } },
+    ]);
+
+    const stats: RegularizationStats = {
+      total: 0,
+      pending: 0,
+      approved: 0,
+      rejected: 0,
+    };
+
+    for (const row of rows) {
+      const count = row.count as number;
+      stats.total += count;
+      if (row._id === RegularizationStatus.PENDING) stats.pending = count;
+      if (row._id === RegularizationStatus.APPROVED) stats.approved = count;
+      if (row._id === RegularizationStatus.REJECTED) stats.rejected = count;
+    }
+
+    return stats;
+  }
+
   async getMyRequests(
     userId: string,
     organizationId: string,
     page = 1,
-    limit = 20
-  ): Promise<{ records: IAttendanceRegularization[]; pagination: object }> {
+    limit = 20,
+    status?: RegularizationStatus
+  ): Promise<{
+    records: IAttendanceRegularization[];
+    pagination: object;
+    stats: RegularizationStats;
+  }> {
     const skip = (page - 1) * limit;
-    const query = { organizationId, userId };
+    const query: Record<string, unknown> = { organizationId, userId };
+    if (status) {
+      query.status = status;
+    }
 
-    const [records, total] = await Promise.all([
+    const [records, total, stats] = await Promise.all([
       AttendanceRegularization.find(query)
-        .sort({ date: -1 })
+        .sort({ date: -1, createdAt: -1 })
         .skip(skip)
         .limit(limit)
         .lean(),
       AttendanceRegularization.countDocuments(query),
+      this.computeStats(organizationId, userId),
     ]);
 
     return {
       records: records as IAttendanceRegularization[],
       pagination: { total, page, limit, pages: Math.ceil(total / limit) },
+      stats,
     };
   }
 
   async getPendingRequests(
     organizationId: string,
-    reviewerId: string,
-    reviewerRole: string,
+    _reviewerId: string,
+    _reviewerRole: string,
     page = 1,
     limit = 50
   ): Promise<{ records: IAttendanceRegularization[]; pagination: object }> {
@@ -103,15 +207,6 @@ export class AttendanceRegularizationService {
       organizationId,
       status: RegularizationStatus.PENDING,
     };
-
-    if (reviewerRole === UserRole.SUPERVISOR) {
-      const teamMembers = await User.find({
-        organizationId,
-        supervisorId: reviewerId,
-        isActive: true,
-      }).select('_id');
-      query.userId = { $in: teamMembers.map((member) => member._id) };
-    }
 
     const skip = (page - 1) * limit;
     const [records, total] = await Promise.all([
@@ -128,30 +223,6 @@ export class AttendanceRegularizationService {
       records: records as IAttendanceRegularization[],
       pagination: { total, page, limit, pages: Math.ceil(total / limit) },
     };
-  }
-
-  private async assertReviewerCanAct(
-    request: IAttendanceRegularization,
-    reviewerId: string,
-    reviewerRole: string,
-    action: 'approve' | 'reject'
-  ): Promise<void> {
-    if (reviewerRole !== UserRole.SUPERVISOR) {
-      return;
-    }
-
-    const employee = await User.findById(request.userId).select('supervisorId organizationId');
-    if (!employee) {
-      throw new Error('Employee not found');
-    }
-
-    if (employee.organizationId?.toString() !== request.organizationId.toString()) {
-      throw new Error('Request is outside your organization');
-    }
-
-    if (employee.supervisorId?.toString() !== reviewerId) {
-      throw new Error(`You can only ${action} regularization requests for your direct reports`);
-    }
   }
 
   private async applyApprovedRequest(
@@ -192,8 +263,8 @@ export class AttendanceRegularizationService {
   async approveRequest(
     requestId: string,
     reviewerId: string,
-    reviewerRole: string,
-    reviewNotes?: string
+    _reviewerRole: string,
+    overrides?: ApproveRegularizationOverrides
   ): Promise<IAttendanceRegularization> {
     const request = await AttendanceRegularization.findById(requestId);
     if (!request) {
@@ -203,13 +274,31 @@ export class AttendanceRegularizationService {
       throw new Error('Request is not pending');
     }
 
-    await this.assertReviewerCanAct(request, reviewerId, reviewerRole, 'approve');
-    await this.applyApprovedRequest(request, reviewerId, reviewNotes);
+    const date = startOfDay(request.date);
+    if (overrides?.requestedCheckIn) {
+      request.requestedCheckIn = this.parseRequestedTime(date, overrides.requestedCheckIn);
+    }
+    if (overrides?.requestedCheckOut) {
+      request.requestedCheckOut = this.parseRequestedTime(date, overrides.requestedCheckOut);
+    }
+    if (overrides?.requestedStatus) {
+      const allowed = [
+        AttendanceStatus.PRESENT,
+        AttendanceStatus.LATE,
+        AttendanceStatus.HALF_DAY,
+      ];
+      if (!allowed.includes(overrides.requestedStatus)) {
+        throw new Error('Invalid requested attendance status');
+      }
+      request.requestedStatus = overrides.requestedStatus;
+    }
+
+    await this.applyApprovedRequest(request, reviewerId, overrides?.notes);
 
     request.status = RegularizationStatus.APPROVED;
     request.reviewedBy = reviewerId as any;
     request.reviewedAt = new Date();
-    request.reviewNotes = reviewNotes;
+    request.reviewNotes = overrides?.notes;
     await request.save();
 
     return request;
@@ -218,7 +307,7 @@ export class AttendanceRegularizationService {
   async rejectRequest(
     requestId: string,
     reviewerId: string,
-    reviewerRole: string,
+    _reviewerRole: string,
     reviewNotes: string
   ): Promise<IAttendanceRegularization> {
     const request = await AttendanceRegularization.findById(requestId);
@@ -228,8 +317,6 @@ export class AttendanceRegularizationService {
     if (request.status !== RegularizationStatus.PENDING) {
       throw new Error('Request is not pending');
     }
-
-    await this.assertReviewerCanAct(request, reviewerId, reviewerRole, 'reject');
 
     request.status = RegularizationStatus.REJECTED;
     request.reviewedBy = reviewerId as any;

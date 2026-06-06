@@ -1,6 +1,7 @@
 import Holiday, { IHoliday, HolidayType } from '../models/Holiday';
 import { startOfDay, endOfDay } from 'date-fns';
 import { expandHolidaysInRange } from '../utils/workingDays';
+import { expandHolidayRecordsInRange } from '../utils/holidayCalendar';
 
 export class HolidayService {
   /**
@@ -37,6 +38,16 @@ export class HolidayService {
     startDate?: Date;
     endDate?: Date;
   }): Promise<IHoliday[]> {
+    if (filters?.year && !filters?.startDate && !filters?.endDate && !filters?.type) {
+      const rangeStart = startOfDay(new Date(filters.year, 0, 1));
+      const rangeEnd = startOfDay(new Date(filters.year, 11, 31));
+      const holidays = await Holiday.find({ organizationId })
+        .populate('createdBy', 'firstName lastName')
+        .lean();
+
+      return expandHolidayRecordsInRange(holidays, rangeStart, rangeEnd) as unknown as IHoliday[];
+    }
+
     const query: any = { organizationId };
 
     if (filters?.year) {

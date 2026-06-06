@@ -17,6 +17,7 @@ router.use(tenantContext, allowOrganizationOverride);
 router.post('/check-in', attendanceController.checkIn);
 router.post('/check-out', attendanceController.checkOut);
 router.get('/today', attendanceController.getTodayStatus);
+router.get('/my-policy', attendanceController.getMyPolicy);
 router.get('/my-attendance', attendanceController.getMyAttendance);
 router.get('/my-stats', attendanceController.getMyStats);
 
@@ -31,17 +32,17 @@ router.get(
 );
 router.get(
   '/regularization/pending',
-  authorize(UserRole.SUPERVISOR, UserRole.HR, UserRole.ADMIN, UserRole.SUPER_ADMIN),
+  authorize(UserRole.HR, UserRole.ADMIN, UserRole.SUPER_ADMIN),
   attendanceRegularizationController.getPendingRequests.bind(attendanceRegularizationController)
 );
 router.patch(
   '/regularization/:id/approve',
-  authorize(UserRole.SUPERVISOR, UserRole.HR, UserRole.ADMIN, UserRole.SUPER_ADMIN),
+  authorize(UserRole.HR, UserRole.ADMIN, UserRole.SUPER_ADMIN),
   attendanceRegularizationController.approveRequest.bind(attendanceRegularizationController)
 );
 router.patch(
   '/regularization/:id/reject',
-  authorize(UserRole.SUPERVISOR, UserRole.HR, UserRole.ADMIN, UserRole.SUPER_ADMIN),
+  authorize(UserRole.HR, UserRole.ADMIN, UserRole.SUPER_ADMIN),
   attendanceRegularizationController.rejectRequest.bind(attendanceRegularizationController)
 );
 

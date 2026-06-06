@@ -7,7 +7,7 @@ export class DepartmentController {
    */
   async createDepartment(req: Request, res: Response): Promise<void> {
     try {
-      const { name, description, headOfDepartment } = req.body;
+      const { name, description, headOfDepartment, defaultShiftId, defaultAttendancePolicyId, defaultLeavePolicyId, defaultPayrollPolicyId } = req.body;
 
       if (!name) {
         res.status(400).json({
@@ -31,7 +31,13 @@ export class DepartmentController {
         organizationId,
         name,
         description,
-        headOfDepartment
+        headOfDepartment,
+        {
+          defaultShiftId,
+          defaultAttendancePolicyId,
+          defaultLeavePolicyId,
+          defaultPayrollPolicyId,
+        }
       );
 
       res.status(201).json({
@@ -46,6 +52,14 @@ export class DepartmentController {
         res.status(400).json({
           success: false,
           message: 'Department with this name already exists in this organization',
+        });
+        return;
+      }
+
+      if (error.statusCode === 400) {
+        res.status(400).json({
+          success: false,
+          message: error.message || 'Invalid department data',
         });
         return;
       }
@@ -116,11 +130,27 @@ export class DepartmentController {
   async updateDepartment(req: Request, res: Response): Promise<void> {
     try {
       const { id } = req.params;
-      const { name, description, headOfDepartment } = req.body;
+      const {
+        name,
+        description,
+        headOfDepartment,
+        defaultShiftId,
+        defaultAttendancePolicyId,
+        defaultLeavePolicyId,
+        defaultPayrollPolicyId,
+      } = req.body;
 
       const department = await departmentService.updateDepartment(
         id,
-        { name, description, headOfDepartment },
+        {
+          name,
+          description,
+          headOfDepartment,
+          defaultShiftId,
+          defaultAttendancePolicyId,
+          defaultLeavePolicyId,
+          defaultPayrollPolicyId,
+        },
         req.organizationId
       );
 
@@ -144,6 +174,14 @@ export class DepartmentController {
         res.status(400).json({
           success: false,
           message: 'Department with this name already exists in this organization',
+        });
+        return;
+      }
+
+      if (error.statusCode === 400) {
+        res.status(400).json({
+          success: false,
+          message: error.message || 'Invalid department update',
         });
         return;
       }
@@ -256,6 +294,45 @@ export class DepartmentController {
         success: false,
         message: 'Failed to remove member',
         error: error.message,
+      });
+    }
+  }
+
+  async updateDefaultPolicies(req: Request, res: Response): Promise<void> {
+    try {
+      const { id } = req.params;
+      const {
+        defaultShiftId,
+        defaultAttendancePolicyId,
+        defaultLeavePolicyId,
+        defaultPayrollPolicyId,
+      } = req.body;
+
+      const department = await departmentService.updateDefaultPolicies(
+        id,
+        req.organizationId!,
+        {
+          defaultShiftId,
+          defaultAttendancePolicyId,
+          defaultLeavePolicyId,
+          defaultPayrollPolicyId,
+        }
+      );
+
+      if (!department) {
+        res.status(404).json({ success: false, message: 'Department not found' });
+        return;
+      }
+
+      res.status(200).json({
+        success: true,
+        message: 'Department default policies updated',
+        data: department,
+      });
+    } catch (error: any) {
+      res.status(400).json({
+        success: false,
+        message: error.message || 'Failed to update default policies',
       });
     }
   }

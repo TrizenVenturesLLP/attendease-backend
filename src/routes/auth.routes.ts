@@ -61,6 +61,27 @@ router.patch(
 router.post('/change-password', authenticate, authController.changePassword);
 
 /**
+ * @route   GET /api/auth/me/profile-photo
+ * @desc    Download profile photo (authenticated — for mobile Image)
+ * @access  Private
+ */
+router.get('/me/profile-photo', authenticate, authController.getProfilePhoto);
+
+/**
+ * @route   POST /api/auth/me/profile-photo
+ * @desc    Upload or replace profile photo
+ * @access  Private
+ */
+router.post('/me/profile-photo', authenticate, authController.updateProfilePhoto);
+
+/**
+ * @route   DELETE /api/auth/me/profile-photo
+ * @desc    Remove profile photo
+ * @access  Private
+ */
+router.delete('/me/profile-photo', authenticate, authController.removeProfilePhoto);
+
+/**
  * @route   POST /api/auth/logout
  * @desc    Logout user
  * @access  Private

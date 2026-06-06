@@ -1,17 +1,24 @@
 import { Request } from 'express';
-import { startOfDay, subDays, isWeekend } from 'date-fns';
+import { startOfDay, subDays, isWeekend, format } from 'date-fns';
 import mongoose from 'mongoose';
 import Leave, { LeaveStatus } from '../models/Leave';
+import AttendanceRegularization, {
+  RegularizationRequestType,
+  RegularizationStatus,
+} from '../models/AttendanceRegularization';
 import User, { UserRole } from '../models/User';
 import Organization from '../models/Organization';
 import PayrollRun, { PayrollRunStatus } from '../models/PayrollRun';
 import NotificationRead from '../models/NotificationRead';
 import { leaveService } from './leaveService';
 import { attendanceService } from './attendanceService';
+import { REQUEST_TYPE_LABELS } from '../utils/attendanceRegularizationValidation';
 
 export type NotificationItemType =
   | 'leave_pending'
   | 'leave_outcome'
+  | 'regularization_pending'
+  | 'regularization_outcome'
   | 'attendance_reminder'
   | 'org_new'
   | 'org_inactive'
@@ -186,6 +193,38 @@ export class NotificationService {
         }
       }
 
+      // Pending attendance regularizations (HR / Admin only)
+      if (role === UserRole.ADMIN || role === UserRole.HR) {
+        const pendingRegularizations = await AttendanceRegularization.find({
+          organizationId: orgId,
+          status: RegularizationStatus.PENDING,
+        })
+          .populate('userId', 'firstName lastName email')
+          .sort({ createdAt: -1 })
+          .limit(20)
+          .lean();
+
+        for (const row of pendingRegularizations) {
+          const u = row.userId as { firstName?: string; lastName?: string; email?: string };
+          const name = u
+            ? `${u.firstName || ''} ${u.lastName || ''}`.trim() || u.email
+            : 'Employee';
+          const requestType = row.requestType as RegularizationRequestType;
+          const typeLabel =
+            REQUEST_TYPE_LABELS[requestType] ||
+            String(requestType || 'attendance correction').replace(/_/g, ' ');
+          const dateLabel = format(new Date(row.date), 'dd MMM yyyy');
+          items.push({
+            id: `regularization-pending:${row._id}`,
+            type: 'regularization_pending',
+            title: 'Regularization review needed',
+            body: `${name} requested ${typeLabel} for ${dateLabel}.`,
+            href: '/dashboard/attendance-regularizations',
+            createdAt: toIso(row.createdAt as Date),
+          });
+        }
+      }
+
       // Employee / everyone with org: own leave outcomes (approved / rejected), recent
       if (
         role === UserRole.EMPLOYEE ||
@@ -212,6 +251,43 @@ export class NotificationService {
             title: `Leave request ${statusLabel}`,
             body: `Your ${row.leaveType} leave (${row.totalDays} day(s)) was ${statusLabel}.`,
             href: '/dashboard/my-leave',
+            createdAt: toIso((row.reviewedAt as Date) || (row.updatedAt as Date)),
+          });
+        }
+      }
+
+      // Own regularization outcomes (approved / rejected), recent
+      if (
+        role === UserRole.EMPLOYEE ||
+        role === UserRole.SUPERVISOR ||
+        role === UserRole.HR ||
+        role === UserRole.ADMIN
+      ) {
+        const regSince = subDays(new Date(), 21);
+        const regOutcomes = await AttendanceRegularization.find({
+          organizationId: orgId,
+          userId: userId,
+          status: { $in: [RegularizationStatus.APPROVED, RegularizationStatus.REJECTED] },
+          updatedAt: { $gte: regSince },
+        })
+          .sort({ updatedAt: -1 })
+          .limit(12)
+          .lean();
+
+        for (const row of regOutcomes) {
+          const statusLabel =
+            row.status === RegularizationStatus.APPROVED ? 'approved' : 'rejected';
+          const requestType = row.requestType as RegularizationRequestType;
+          const typeLabel =
+            REQUEST_TYPE_LABELS[requestType] ||
+            String(requestType || 'attendance correction').replace(/_/g, ' ');
+          const dateLabel = format(new Date(row.date), 'dd MMM yyyy');
+          items.push({
+            id: `regularization-outcome:${row._id}`,
+            type: 'regularization_outcome',
+            title: `Regularization ${statusLabel}`,
+            body: `Your ${typeLabel} request for ${dateLabel} was ${statusLabel}.`,
+            href: '/dashboard/my-attendance',
             createdAt: toIso((row.reviewedAt as Date) || (row.updatedAt as Date)),
           });
         }

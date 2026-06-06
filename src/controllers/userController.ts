@@ -467,6 +467,60 @@ class UserController {
       next(error);
     }
   }
+
+  async updateUserShift(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const { id } = req.params;
+      const { shiftId } = req.body;
+      const user = await userService.updateUserShift(id, shiftId ?? null, req.organizationId!);
+      res.status(200).json({
+        success: true,
+        message: 'Shift updated',
+        data: user,
+        timestamp: new Date().toISOString(),
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  async updateUserAttendancePolicy(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const { id } = req.params;
+      const { attendancePolicyId } = req.body;
+      if (!attendancePolicyId) {
+        throw new BadRequestError('attendancePolicyId is required');
+      }
+      const user = await userService.updateUserAttendancePolicy(
+        id,
+        attendancePolicyId,
+        req.organizationId!
+      );
+      res.status(200).json({
+        success: true,
+        message: 'Attendance policy updated',
+        data: user,
+        timestamp: new Date().toISOString(),
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  async updateUserPolicies(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const { id } = req.params;
+      const user = await userService.updateUserPolicies(id, req.organizationId!, req.body);
+      res.status(200).json({
+        success: true,
+        message: 'Policies updated',
+        data: user,
+        timestamp: new Date().toISOString(),
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
 }
 
 export default new UserController();

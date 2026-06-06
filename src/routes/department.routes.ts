@@ -30,6 +30,12 @@ router.put(
   departmentController.updateDepartment.bind(departmentController)
 );
 
+router.patch(
+  '/:id/default-policies',
+  authorize('admin', 'super_admin', 'hr'),
+  departmentController.updateDefaultPolicies.bind(departmentController)
+);
+
 router.delete(
   '/:id',
   authorize('admin', 'super_admin'),

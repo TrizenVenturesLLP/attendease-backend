@@ -12,6 +12,7 @@
     "seed:departments": "ts-node src/scripts/seedDepartments.ts",
     "migrate:multitenant": "ts-node src/scripts/migrateToMultiTenant.ts",
     "migrate:employee-ids": "ts-node src/scripts/migrateEmployeeIds.ts",
+    "migrate:attendance-policies": "ts-node src/scripts/migrateAttendancePolicies.ts",
     "sync:dept-ids": "ts-node src/scripts/syncDeptAndRegenIds.ts",
     "reset:test-users": "ts-node src/scripts/resetTestUsers.ts",
     "lint": "eslint src --ext .ts",

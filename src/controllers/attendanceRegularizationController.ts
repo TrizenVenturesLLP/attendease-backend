@@ -1,17 +1,25 @@
 import { Request, Response } from 'express';
 import { AttendanceStatus } from '../models/Attendance';
+import { RegularizationRequestType, RegularizationStatus } from '../models/AttendanceRegularization';
 import { attendanceRegularizationService } from '../services/attendanceRegularizationService';
 
 export class AttendanceRegularizationController {
   async createRequest(req: Request, res: Response): Promise<void> {
     try {
       const userId = req.user!.userId;
-      const { date, requestedCheckIn, requestedCheckOut, requestedStatus, reason } = req.body;
+      const {
+        date,
+        requestType,
+        requestedCheckIn,
+        requestedCheckOut,
+        requestedStatus,
+        reason,
+      } = req.body;
 
-      if (!date || !requestedStatus || !reason?.trim()) {
+      if (!date || !requestType || !reason?.trim()) {
         res.status(400).json({
           success: false,
-          error: 'date, requestedStatus, and reason are required',
+          error: 'date, requestType, and reason are required',
           timestamp: new Date().toISOString(),
         });
         return;
@@ -22,9 +30,10 @@ export class AttendanceRegularizationController {
         req.organizationId!,
         {
           date: new Date(date),
+          requestType: requestType as RegularizationRequestType,
           requestedCheckIn,
           requestedCheckOut,
-          requestedStatus: requestedStatus as AttendanceStatus,
+          requestedStatus: requestedStatus as AttendanceStatus | undefined,
           reason,
         }
       );
@@ -49,17 +58,20 @@ export class AttendanceRegularizationController {
       const userId = req.user!.userId;
       const page = req.query.page ? parseInt(req.query.page as string, 10) : 1;
       const limit = req.query.limit ? parseInt(req.query.limit as string, 10) : 20;
+      const status = req.query.status as RegularizationStatus | undefined;
 
       const result = await attendanceRegularizationService.getMyRequests(
         userId,
         req.organizationId!,
         page,
-        limit
+        limit,
+        status
       );
 
       res.status(200).json({
         success: true,
         data: result.records,
+        stats: result.stats,
         pagination: result.pagination,
         timestamp: new Date().toISOString(),
       });
@@ -103,13 +115,18 @@ export class AttendanceRegularizationController {
   async approveRequest(req: Request, res: Response): Promise<void> {
     try {
       const { id } = req.params;
-      const { notes } = req.body;
+      const { notes, requestedCheckIn, requestedCheckOut, requestedStatus } = req.body;
 
       const request = await attendanceRegularizationService.approveRequest(
         id,
         req.user!.userId,
         req.user!.role,
-        notes
+        {
+          notes,
+          requestedCheckIn,
+          requestedCheckOut,
+          requestedStatus: requestedStatus as AttendanceStatus | undefined,
+        }
       );
 
       res.status(200).json({

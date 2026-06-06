@@ -10,6 +10,8 @@ interface MinIOConfig {
   bucketName?: string;
   publicDomain?: string;
   region?: string;
+  /** When true, skip public-read bucket policy (private buckets). */
+  privateBucket?: boolean;
 }
 
 export class MinIOStorage extends BaseStorage {
@@ -20,6 +22,7 @@ export class MinIOStorage extends BaseStorage {
   private bucketName: string;
   private publicDomain?: string;
   private region: string;
+  private privateBucket: boolean;
 
   constructor(config: MinIOConfig = {}) {
     super();
@@ -34,21 +37,35 @@ export class MinIOStorage extends BaseStorage {
 
     let protocol = useSSL ? 'https' : 'http';
     let host = 'srv-captain--extrahand-minio-storage';
-    let port = rawPort || '9000';
+    let port = rawPort || '';
 
     if (rawEndpoint) {
       try {
         if (rawEndpoint.includes('://')) {
           const url = new URL(rawEndpoint);
           host = url.hostname || host;
-          port = url.port || rawPort || port;
           protocol = url.protocol.replace(':', '') || protocol;
+          if (url.port) {
+            port = url.port;
+          } else if (rawPort) {
+            port = rawPort;
+          } else if (protocol === 'http') {
+            port = '9000';
+          } else {
+            // HTTPS without explicit port — use default 443 (omit from endpoint string)
+            port = '';
+          }
         } else {
           host = rawEndpoint;
+          if (!port) {
+            port = protocol === 'http' ? '9000' : '';
+          }
         }
       } catch (e) {
         console.warn('⚠️ Could not parse MINIO_ENDPOINT, using defaults', { rawEndpoint, error: (e as Error).message });
       }
+    } else if (!port) {
+      port = protocol === 'http' ? '9000' : '';
     }
 
     const endpointString = `${protocol}://${host}${port ? `:${port}` : ''}`;
@@ -77,6 +94,7 @@ export class MinIOStorage extends BaseStorage {
     
     // Support MINIO_REGION_NAME from CapRover, fallback to us-east-1
     this.region = config.region || process.env.MINIO_REGION_NAME || 'us-east-1';
+    this.privateBucket = !!config.privateBucket;
 
     // Initialize S3 client (MinIO is S3-compatible)
     this.s3 = new AWS.S3({
@@ -88,8 +106,8 @@ export class MinIOStorage extends BaseStorage {
       region: this.region,
       // Fast-fail timeouts to prevent blocking
       httpOptions: {
-        timeout: 5000, // 5 second timeout for HTTP requests
-        connectTimeout: 3000, // 3 second timeout for initial connection
+        timeout: 30000,
+        connectTimeout: 10000,
       },
       // Disable retries for faster failure
       maxRetries: 0,
@@ -139,10 +157,12 @@ export class MinIOStorage extends BaseStorage {
 
       try {
         await this.s3.headBucket({ Bucket: this.bucketName }).promise();
-        try {
-          await this.ensureBucketPolicy();
-        } catch {
-          // Ignore policy errors - not critical
+        if (!this.privateBucket) {
+          try {
+            await this.ensureBucketPolicy();
+          } catch {
+            // Ignore policy errors - not critical
+          }
         }
         return true;
       } catch (headError: any) {
@@ -155,10 +175,12 @@ export class MinIOStorage extends BaseStorage {
             console.log(`📦 Bucket '${this.bucketName}' not found. Creating it...`);
             await this.s3.createBucket({ Bucket: this.bucketName }).promise();
 
-            try {
-              await this.ensureBucketPolicy();
-            } catch {
-              // Ignore policy errors - not critical
+            if (!this.privateBucket) {
+              try {
+                await this.ensureBucketPolicy();
+              } catch {
+                // Ignore policy errors - not critical
+              }
             }
 
             console.log(`✅ Bucket '${this.bucketName}' created successfully`);
@@ -337,6 +359,36 @@ export class MinIOStorage extends BaseStorage {
   }
 
   /**
+   * Presigned GET URL for private buckets (e.g. profile photos).
+   */
+  getPresignedUrl(key: string, expiresSeconds = 86400): Promise<string> {
+    if (!this.accessKeyId || !this.secretAccessKey) {
+      return Promise.reject(new Error('MinIO credentials not configured'));
+    }
+
+    return this.s3.getSignedUrlPromise('getObject', {
+      Bucket: this.bucketName,
+      Key: key,
+      Expires: expiresSeconds,
+    });
+  }
+
+  /**
+   * Download object bytes (for API proxy serving private files).
+   */
+  async getObjectBuffer(key: string): Promise<{ buffer: Buffer; contentType: string }> {
+    if (!this.accessKeyId || !this.secretAccessKey) {
+      throw new Error('MinIO credentials not configured');
+    }
+
+    const result = await this.s3.getObject({ Bucket: this.bucketName, Key: key }).promise();
+    return {
+      buffer: result.Body as Buffer,
+      contentType: result.ContentType || 'image/jpeg',
+    };
+  }
+
+  /**
    * Health check - verify MinIO is accessible
    */
   async healthCheck(): Promise<boolean> {
@@ -355,5 +407,19 @@ export class MinIOStorage extends BaseStorage {
   }
 }
 
-// Export singleton instance
+// Export singleton instances
 export const minioStorage = new MinIOStorage();
+
+export const profileMinioStorage = new MinIOStorage({
+  bucketName: process.env.MINIO_PROFILE_BUCKET_NAME || 'profile-photos',
+  privateBucket: true,
+});
+
+/** Check-in selfie bucket (private). Name matches MinIO console: attendence-image-checkin */
+export const checkInMinioStorage = new MinIOStorage({
+  bucketName:
+    process.env.MINIO_CHECKIN_BUCKET_NAME ||
+    process.env.MINIO_BUCKET_NAME ||
+    'attendence-image-checkin',
+  privateBucket: true,
+});
