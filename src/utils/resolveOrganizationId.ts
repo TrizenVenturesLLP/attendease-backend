@@ -16,6 +16,13 @@ export async function resolveOrganizationId(req: Request): Promise<string> {
     return req.organizationId;
   }
 
+  const bodyOrgId =
+    typeof req.body?.organizationId === 'string' ? req.body.organizationId.trim() : '';
+  if (bodyOrgId && req.user?.role === UserRole.SUPER_ADMIN) {
+    req.organizationId = bodyOrgId;
+    return bodyOrgId;
+  }
+
   if (req.user?.role === UserRole.SUPER_ADMIN) {
     throw new ForbiddenError(
       'Organization context required. Use a tenant URL or pass ?organizationId= for platform access.'
