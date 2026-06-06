@@ -45,7 +45,6 @@ export interface IUser extends Document {
   resetPasswordToken?: string;
   resetPasswordExpires?: Date;
   profilePhotoKey?: string;
-  shiftId?: mongoose.Types.ObjectId;
   attendancePolicyId?: mongoose.Types.ObjectId;
   leavePolicyId?: mongoose.Types.ObjectId;
   payrollPolicyId?: mongoose.Types.ObjectId;
@@ -172,10 +171,6 @@ const UserSchema = new Schema<IUser>(
     profilePhotoKey: {
       type: String,
       trim: true,
-    },
-    shiftId: {
-      type: Schema.Types.ObjectId,
-      sparse: true,
     },
     attendancePolicyId: {
       type: Schema.Types.ObjectId,

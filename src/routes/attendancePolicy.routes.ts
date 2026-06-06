@@ -35,14 +35,20 @@ router.put(
 
 router.patch(
   '/:id/status',
-  authorize(UserRole.ADMIN, UserRole.SUPER_ADMIN),
+  authorize(UserRole.ADMIN, UserRole.HR, UserRole.SUPER_ADMIN),
   attendancePolicyController.updateStatus.bind(attendancePolicyController)
 );
 
 router.patch(
   '/:id/default',
-  authorize(UserRole.ADMIN, UserRole.SUPER_ADMIN),
+  authorize(UserRole.ADMIN, UserRole.HR, UserRole.SUPER_ADMIN),
   attendancePolicyController.setDefault.bind(attendancePolicyController)
+);
+
+router.delete(
+  '/:id',
+  authorize(UserRole.ADMIN, UserRole.HR, UserRole.SUPER_ADMIN),
+  attendancePolicyController.delete.bind(attendancePolicyController)
 );
 
 export default router;

@@ -11,7 +11,6 @@ import User, { AuthProvider, IUser, UserRole } from '../models/User';
 import Organization from '../models/Organization';
 import Department from '../models/Department';
 import AttendancePolicy, { PolicyStatus } from '../models/AttendancePolicy';
-import { attendancePolicyService } from './attendancePolicyService';
 import {
   BadRequestError,
   NotFoundError,
@@ -30,7 +29,6 @@ export interface CreateUserData {
   department?: string;
   supervisorId?: string;
   employeeId?: string;
-  shiftId?: string;
   attendancePolicyId?: string;
   leavePolicyId?: string;
   payrollPolicyId?: string;
@@ -43,7 +41,6 @@ export interface UpdateUserData {
   department?: string;
   supervisorId?: string;
   employeeId?: string;
-  shiftId?: string;
   attendancePolicyId?: string;
   leavePolicyId?: string;
   payrollPolicyId?: string;
@@ -75,9 +72,6 @@ class UserService {
 
     return {
       ...userData,
-      shiftId: userData.shiftId ?? dept.defaultShiftId?.toString(),
-      attendancePolicyId:
-        userData.attendancePolicyId ?? dept.defaultAttendancePolicyId?.toString(),
       leavePolicyId: userData.leavePolicyId ?? dept.defaultLeavePolicyId?.toString(),
       payrollPolicyId: userData.payrollPolicyId ?? dept.defaultPayrollPolicyId?.toString(),
     };
@@ -87,7 +81,6 @@ class UserService {
     organizationId: string,
     data: {
       attendancePolicyId?: string;
-      shiftId?: string;
       leavePolicyId?: string;
       payrollPolicyId?: string;
     }
@@ -102,15 +95,6 @@ class UserService {
         throw new BadRequestError('Active attendance policy not found in this organization');
       }
     }
-  }
-
-  private async ensureUserHasAttendancePolicy(
-    organizationId: string,
-    attendancePolicyId?: string
-  ): Promise<string> {
-    if (attendancePolicyId) return attendancePolicyId;
-    const defaultPolicy = await attendancePolicyService.ensureDefaultPolicyForOrg(organizationId);
-    return defaultPolicy._id.toString();
   }
 
   private async reactivateOrgUser(
@@ -463,10 +447,6 @@ class UserService {
 
     const withDefaults = await this.applyDepartmentPolicyDefaults(userData);
     await this.validatePolicyAssignments(userData.organizationId, withDefaults);
-    const attendancePolicyId = await this.ensureUserHasAttendancePolicy(
-      userData.organizationId,
-      withDefaults.attendancePolicyId
-    );
 
     // Invite flow: no password in request — user sets it via email link
     const password =
@@ -478,9 +458,8 @@ class UserService {
       email: normalizedEmail,
       password,
       createdBy: createdByUserId,
-      attendancePolicyId: new mongoose.Types.ObjectId(attendancePolicyId),
-      shiftId: withDefaults.shiftId
-        ? new mongoose.Types.ObjectId(withDefaults.shiftId)
+      attendancePolicyId: withDefaults.attendancePolicyId
+        ? new mongoose.Types.ObjectId(withDefaults.attendancePolicyId)
         : undefined,
       leavePolicyId: withDefaults.leavePolicyId
         ? new mongoose.Types.ObjectId(withDefaults.leavePolicyId)
@@ -783,12 +762,6 @@ class UserService {
         name: { $regex: `^${updates.department.trim()}$`, $options: 'i' },
       }).lean();
       if (dept) {
-        if (!updates.shiftId && dept.defaultShiftId) {
-          updates.shiftId = dept.defaultShiftId.toString();
-        }
-        if (!updates.attendancePolicyId && dept.defaultAttendancePolicyId) {
-          updates.attendancePolicyId = dept.defaultAttendancePolicyId.toString();
-        }
         if (!updates.leavePolicyId && dept.defaultLeavePolicyId) {
           updates.leavePolicyId = dept.defaultLeavePolicyId.toString();
         }
@@ -798,20 +771,14 @@ class UserService {
       }
     }
 
-    if (
-      updates.attendancePolicyId ||
-      updates.shiftId ||
-      updates.leavePolicyId ||
-      updates.payrollPolicyId
-    ) {
+    if (updates.attendancePolicyId || updates.leavePolicyId || updates.payrollPolicyId) {
       await this.validatePolicyAssignments(user.organizationId!.toString(), updates);
     }
 
-    if (updates.attendancePolicyId) {
-      user.attendancePolicyId = new mongoose.Types.ObjectId(updates.attendancePolicyId);
-    }
-    if (updates.shiftId) {
-      user.shiftId = new mongoose.Types.ObjectId(updates.shiftId);
+    if (updates.attendancePolicyId !== undefined) {
+      user.attendancePolicyId = updates.attendancePolicyId
+        ? new mongoose.Types.ObjectId(updates.attendancePolicyId)
+        : undefined;
     }
     if (updates.leavePolicyId) {
       user.leavePolicyId = new mongoose.Types.ObjectId(updates.leavePolicyId);
@@ -823,19 +790,10 @@ class UserService {
       user.joiningDate = new Date(updates.joiningDate);
     }
 
-    const { shiftId, attendancePolicyId, leavePolicyId, payrollPolicyId, joiningDate, ...rest } =
-      updates;
+    const { attendancePolicyId, leavePolicyId, payrollPolicyId, joiningDate, ...rest } = updates;
     Object.assign(user, rest);
     await user.save();
 
-    return user;
-  }
-
-  async updateUserShift(userId: string, shiftId: string | null, organizationId: string): Promise<IUser> {
-    const user = await User.findOne({ _id: userId, organizationId });
-    if (!user) throw new NotFoundError('User not found');
-    user.shiftId = shiftId ? new mongoose.Types.ObjectId(shiftId) : undefined;
-    await user.save();
     return user;
   }
 
@@ -856,15 +814,13 @@ class UserService {
     userId: string,
     organizationId: string,
     policies: {
-      shiftId?: string | null;
-      attendancePolicyId?: string;
+      attendancePolicyId?: string | null;
       leavePolicyId?: string | null;
       payrollPolicyId?: string | null;
     }
   ): Promise<IUser> {
     await this.validatePolicyAssignments(organizationId, {
-      attendancePolicyId: policies.attendancePolicyId,
-      shiftId: policies.shiftId ?? undefined,
+      attendancePolicyId: policies.attendancePolicyId ?? undefined,
       leavePolicyId: policies.leavePolicyId ?? undefined,
       payrollPolicyId: policies.payrollPolicyId ?? undefined,
     });
@@ -872,13 +828,10 @@ class UserService {
     const user = await User.findOne({ _id: userId, organizationId });
     if (!user) throw new NotFoundError('User not found');
 
-    if (policies.shiftId !== undefined) {
-      user.shiftId = policies.shiftId
-        ? new mongoose.Types.ObjectId(policies.shiftId)
+    if (policies.attendancePolicyId !== undefined) {
+      user.attendancePolicyId = policies.attendancePolicyId
+        ? new mongoose.Types.ObjectId(policies.attendancePolicyId)
         : undefined;
-    }
-    if (policies.attendancePolicyId) {
-      user.attendancePolicyId = new mongoose.Types.ObjectId(policies.attendancePolicyId);
     }
     if (policies.leavePolicyId !== undefined) {
       user.leavePolicyId = policies.leavePolicyId

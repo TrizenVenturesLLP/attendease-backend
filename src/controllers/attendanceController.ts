@@ -154,7 +154,6 @@ export class AttendanceController {
         status,
         department,
         attendancePolicyId,
-        shiftId,
         dayType,
         page,
         limit,
@@ -167,7 +166,6 @@ export class AttendanceController {
       if (status) filters.status = status as AttendanceStatus;
       if (department) filters.department = department as string;
       if (attendancePolicyId) filters.attendancePolicyId = attendancePolicyId as string;
-      if (shiftId) filters.shiftId = shiftId as string;
       if (dayType) filters.dayType = dayType as string;
 
       const result = await attendanceService.getAllAttendance(

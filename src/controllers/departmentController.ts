@@ -7,7 +7,14 @@ export class DepartmentController {
    */
   async createDepartment(req: Request, res: Response): Promise<void> {
     try {
-      const { name, description, headOfDepartment, defaultShiftId, defaultAttendancePolicyId, defaultLeavePolicyId, defaultPayrollPolicyId } = req.body;
+      const {
+        name,
+        description,
+        headOfDepartment,
+        departmentAttendancePolicyId,
+        defaultLeavePolicyId,
+        defaultPayrollPolicyId,
+      } = req.body;
 
       if (!name) {
         res.status(400).json({
@@ -33,8 +40,7 @@ export class DepartmentController {
         description,
         headOfDepartment,
         {
-          defaultShiftId,
-          defaultAttendancePolicyId,
+          departmentAttendancePolicyId,
           defaultLeavePolicyId,
           defaultPayrollPolicyId,
         }
@@ -134,8 +140,7 @@ export class DepartmentController {
         name,
         description,
         headOfDepartment,
-        defaultShiftId,
-        defaultAttendancePolicyId,
+        departmentAttendancePolicyId,
         defaultLeavePolicyId,
         defaultPayrollPolicyId,
       } = req.body;
@@ -146,8 +151,7 @@ export class DepartmentController {
           name,
           description,
           headOfDepartment,
-          defaultShiftId,
-          defaultAttendancePolicyId,
+          departmentAttendancePolicyId,
           defaultLeavePolicyId,
           defaultPayrollPolicyId,
         },
@@ -302,8 +306,7 @@ export class DepartmentController {
     try {
       const { id } = req.params;
       const {
-        defaultShiftId,
-        defaultAttendancePolicyId,
+        departmentAttendancePolicyId,
         defaultLeavePolicyId,
         defaultPayrollPolicyId,
       } = req.body;
@@ -312,8 +315,7 @@ export class DepartmentController {
         id,
         req.organizationId!,
         {
-          defaultShiftId,
-          defaultAttendancePolicyId,
+          departmentAttendancePolicyId,
           defaultLeavePolicyId,
           defaultPayrollPolicyId,
         }

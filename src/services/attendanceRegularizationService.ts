@@ -1,6 +1,5 @@
 import mongoose from 'mongoose';
 import Attendance, { AttendanceStatus } from '../models/Attendance';
-import AttendancePolicy, { IAttendancePolicy } from '../models/AttendancePolicy';
 import AttendanceRegularization, {
   IAttendanceRegularization,
   RegularizationRequestType,
@@ -8,7 +7,7 @@ import AttendanceRegularization, {
 } from '../models/AttendanceRegularization';
 import User, { UserRole } from '../models/User';
 import { startOfDay } from 'date-fns';
-import { attendancePolicyService } from './attendancePolicyService';
+import { resolveUserAttendancePolicy } from '../utils/resolveUserAttendancePolicy';
 import { parseTimeOnDate } from '../utils/organizationSettings';
 import { validateRegularizationPayload } from '../utils/attendanceRegularizationValidation';
 
@@ -35,24 +34,6 @@ export type RegularizationStats = {
   rejected: number;
 };
 
-async function getUserPolicy(user: {
-  organizationId: { toString(): string };
-  attendancePolicyId?: { toString(): string };
-}): Promise<IAttendancePolicy | null> {
-  const organizationId = user.organizationId.toString();
-  let policy: IAttendancePolicy | null = user.attendancePolicyId
-    ? await AttendancePolicy.findOne({
-        _id: user.attendancePolicyId,
-        organizationId,
-        status: 'ACTIVE',
-      }).lean()
-    : null;
-
-  if (!policy) {
-    policy = await attendancePolicyService.getDefaultPolicy(organizationId);
-  }
-  return policy;
-}
 
 export class AttendanceRegularizationService {
   private parseRequestedTime(date: Date, time?: string): Date | undefined {
@@ -70,7 +51,7 @@ export class AttendanceRegularizationService {
       throw new Error('User not found');
     }
 
-    const policy = await getUserPolicy(user);
+    const policy = await resolveUserAttendancePolicy(user);
     if (policy && policy.allowRegularization === false) {
       throw new Error('Attendance regularization is not allowed under your attendance policy');
     }

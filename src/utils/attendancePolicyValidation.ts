@@ -1,17 +1,30 @@
 import mongoose from 'mongoose';
 import AttendancePolicy, {
   ALL_WEEK_DAYS,
-  DefaultFullDayRule,
   PolicyDayType,
   PolicyStatus,
   WeekDay,
   WeekRule,
 } from '../models/AttendancePolicy';
+import Shift, { IShift } from '../models/Shift';
 import { BadRequestError } from './AppError';
+import {
+  computeExpectedHoursFromTimes,
+  parseTimeToMinutes,
+  validateShiftTimes,
+} from './shiftTiming';
+
+export type ShiftTiming = {
+  startTime: string;
+  endTime: string;
+  expectedHours: number;
+  graceMinutes: number;
+  isNightShift?: boolean;
+};
 
 export type AttendancePolicyInput = {
   policyName: string;
-  defaultFullDayRule: DefaultFullDayRule;
+  shiftId: string;
   weekRules: WeekRule[];
   autoAbsentEnabled?: boolean;
   allowRegularization?: boolean;
@@ -19,58 +32,38 @@ export type AttendancePolicyInput = {
   status?: PolicyStatus;
 };
 
-function parseTimeToMinutes(time: string): number {
-  const [h, m] = time.split(':').map(Number);
-  return h * 60 + m;
-}
-
-export function computeExpectedHoursFromTimes(startTime?: string, endTime?: string): number | undefined {
-  if (!startTime || !endTime) {
-    return undefined;
-  }
-  const start = parseTimeToMinutes(startTime);
-  const end = parseTimeToMinutes(endTime);
-  if (end <= start) {
-    return undefined;
-  }
-  return Math.round(((end - start) / 60) * 100) / 100;
-}
-
-export function normalizeWeekRules(
-  weekRules: WeekRule[],
-  defaultFullDayRule: DefaultFullDayRule
-): WeekRule[] {
+export function normalizeWeekRules(weekRules: WeekRule[], shift: ShiftTiming): WeekRule[] {
   return weekRules.map((rule) => {
     if (rule.dayType === PolicyDayType.WEEKLY_OFF) {
-      return { ...rule, useDefaultTiming: false };
+      return { ...rule, useShiftTiming: false };
     }
 
-    if (rule.dayType === PolicyDayType.HALF_DAY) {
-      const startTime = rule.startTime ?? defaultFullDayRule.startTime;
-      const endTime = rule.endTime ?? defaultFullDayRule.endTime;
-      const expectedHours =
-        rule.expectedHours ??
-        computeExpectedHoursFromTimes(startTime, endTime) ??
-        Math.round((defaultFullDayRule.expectedHours / 2) * 100) / 100;
-
-      return {
-        ...rule,
-        startTime,
-        endTime,
-        expectedHours,
-        useDefaultTiming: false,
-        graceMinutes: rule.graceMinutes ?? defaultFullDayRule.graceMinutes,
-      };
+    if (rule.useShiftTiming) {
+      return { ...rule, useShiftTiming: true };
     }
 
-    return rule;
+    const startTime = rule.startTime ?? shift.startTime;
+    const endTime = rule.endTime ?? shift.endTime;
+    const isNight = shift.isNightShift ?? false;
+    const expectedHours =
+      rule.expectedHours ??
+      computeExpectedHoursFromTimes(startTime, endTime, isNight) ??
+      (rule.dayType === PolicyDayType.HALF_DAY
+        ? Math.round((shift.expectedHours / 2) * 100) / 100
+        : shift.expectedHours);
+
+    return {
+      ...rule,
+      startTime,
+      endTime,
+      expectedHours,
+      useShiftTiming: false,
+      graceMinutes: rule.graceMinutes ?? shift.graceMinutes,
+    };
   });
 }
 
-export function validateWeekRules(
-  weekRules: WeekRule[],
-  defaultFullDayRule: DefaultFullDayRule
-): void {
+export function validateWeekRules(weekRules: WeekRule[], shift: ShiftTiming): void {
   if (!Array.isArray(weekRules) || weekRules.length !== 7) {
     throw new BadRequestError('Week rules must contain all 7 days from Monday to Sunday');
   }
@@ -89,27 +82,24 @@ export function validateWeekRules(
       continue;
     }
 
-    if (rule.dayType === PolicyDayType.HALF_DAY) {
-      if (!rule.startTime || !rule.endTime) {
-        throw new BadRequestError(`${rule.day}: HALF_DAY requires startTime and endTime`);
-      }
-      if (parseTimeToMinutes(rule.endTime) <= parseTimeToMinutes(rule.startTime)) {
-        throw new BadRequestError(`${rule.day}: endTime must be after startTime`);
-      }
+    if (rule.useShiftTiming) {
       continue;
     }
 
-    if (rule.dayType === PolicyDayType.FULL_DAY) {
-      if (rule.useDefaultTiming === false) {
-        if (!rule.startTime || !rule.endTime) {
-          throw new BadRequestError(
-            `${rule.day}: FULL_DAY with custom timing requires startTime and endTime`
-          );
-        }
-        if (parseTimeToMinutes(rule.endTime) <= parseTimeToMinutes(rule.startTime)) {
-          throw new BadRequestError(`${rule.day}: endTime must be after startTime`);
-        }
-      }
+    if (!rule.startTime || !rule.endTime) {
+      throw new BadRequestError(
+        `${rule.day}: custom timing requires startTime and endTime when useShiftTiming is false`
+      );
+    }
+
+    const isNight = shift.isNightShift ?? false;
+    if (!isNight && parseTimeToMinutes(rule.endTime) <= parseTimeToMinutes(rule.startTime)) {
+      throw new BadRequestError(`${rule.day}: endTime must be after startTime`);
+    }
+    if (isNight && parseTimeToMinutes(rule.endTime) > parseTimeToMinutes(rule.startTime)) {
+      throw new BadRequestError(
+        `${rule.day}: custom night-shift timing requires endTime earlier than startTime`
+      );
     }
   }
 
@@ -119,16 +109,12 @@ export function validateWeekRules(
     }
   }
 
-  const start = parseTimeToMinutes(defaultFullDayRule.startTime);
-  const end = parseTimeToMinutes(defaultFullDayRule.endTime);
-  if (end <= start) {
-    throw new BadRequestError('Default full-day endTime must be after startTime');
-  }
+  validateShiftTimes(shift.startTime, shift.endTime, shift.isNightShift ?? false);
 }
 
 export function resolveDayRule(
   weekRules: WeekRule[],
-  defaultFullDayRule: DefaultFullDayRule,
+  shift: ShiftTiming,
   day: WeekDay
 ): {
   dayType: PolicyDayType;
@@ -139,46 +125,49 @@ export function resolveDayRule(
 } {
   const rule = weekRules.find((r) => r.day === day);
   if (!rule) {
-    return { dayType: PolicyDayType.FULL_DAY, ...defaultFullDayRule };
+    return {
+      dayType: PolicyDayType.FULL_DAY,
+      startTime: shift.startTime,
+      endTime: shift.endTime,
+      expectedHours: shift.expectedHours,
+      graceMinutes: shift.graceMinutes,
+    };
   }
 
   if (rule.dayType === PolicyDayType.WEEKLY_OFF) {
     return { dayType: PolicyDayType.WEEKLY_OFF };
   }
 
-  if (rule.dayType === PolicyDayType.HALF_DAY) {
-    const startTime = rule.startTime ?? defaultFullDayRule.startTime;
-    const endTime = rule.endTime ?? defaultFullDayRule.endTime;
+  if (rule.useShiftTiming) {
     const expectedHours =
-      rule.expectedHours ??
-      computeExpectedHoursFromTimes(startTime, endTime) ??
-      Math.round((defaultFullDayRule.expectedHours / 2) * 100) / 100;
-
+      rule.dayType === PolicyDayType.HALF_DAY
+        ? Math.round((shift.expectedHours / 2) * 100) / 100
+        : shift.expectedHours;
     return {
-      dayType: PolicyDayType.HALF_DAY,
-      startTime,
-      endTime,
+      dayType: rule.dayType,
+      startTime: shift.startTime,
+      endTime: shift.endTime,
       expectedHours,
-      graceMinutes: rule.graceMinutes ?? defaultFullDayRule.graceMinutes,
+      graceMinutes: shift.graceMinutes,
     };
   }
 
-  if (rule.useDefaultTiming) {
-    return {
-      dayType: PolicyDayType.FULL_DAY,
-      startTime: defaultFullDayRule.startTime,
-      endTime: defaultFullDayRule.endTime,
-      expectedHours: defaultFullDayRule.expectedHours,
-      graceMinutes: defaultFullDayRule.graceMinutes,
-    };
-  }
+  const startTime = rule.startTime ?? shift.startTime;
+  const endTime = rule.endTime ?? shift.endTime;
+  const isNight = shift.isNightShift ?? false;
+  const expectedHours =
+    rule.expectedHours ??
+    computeExpectedHoursFromTimes(startTime, endTime, isNight) ??
+    (rule.dayType === PolicyDayType.HALF_DAY
+      ? Math.round((shift.expectedHours / 2) * 100) / 100
+      : shift.expectedHours);
 
   return {
-    dayType: PolicyDayType.FULL_DAY,
-    startTime: rule.startTime ?? defaultFullDayRule.startTime,
-    endTime: rule.endTime ?? defaultFullDayRule.endTime,
-    expectedHours: rule.expectedHours ?? defaultFullDayRule.expectedHours,
-    graceMinutes: rule.graceMinutes ?? defaultFullDayRule.graceMinutes,
+    dayType: rule.dayType,
+    startTime,
+    endTime,
+    expectedHours,
+    graceMinutes: rule.graceMinutes ?? shift.graceMinutes,
   };
 }
 
@@ -211,9 +200,40 @@ export async function assertActivePolicyInOrg(
   }
 }
 
+export async function assertActiveShiftInOrg(
+  shiftId: string,
+  organizationId: string
+): Promise<IShift> {
+  const shift = await Shift.findOne({
+    _id: shiftId,
+    organizationId,
+    status: 'ACTIVE',
+  }).lean();
+
+  if (!shift) {
+    throw new BadRequestError('Active shift not found in this organization');
+  }
+  return shift as IShift;
+}
+
+export function shiftToTiming(shift: IShift): ShiftTiming {
+  return {
+    startTime: shift.startTime,
+    endTime: shift.endTime,
+    expectedHours: shift.expectedHours,
+    graceMinutes: shift.graceMinutes,
+    isNightShift: shift.isNightShift,
+  };
+}
+
 export async function assertSameOrgRefs(
   organizationId: string,
-  refs: { attendancePolicyId?: string; shiftId?: string; leavePolicyId?: string; payrollPolicyId?: string }
+  refs: {
+    attendancePolicyId?: string;
+    shiftId?: string;
+    leavePolicyId?: string;
+    payrollPolicyId?: string;
+  }
 ): Promise<void> {
   if (refs.attendancePolicyId) {
     const exists = await AttendancePolicy.exists({
@@ -225,9 +245,15 @@ export async function assertSameOrgRefs(
     }
   }
 
-  // shiftId, leavePolicyId, payrollPolicyId — validated when dedicated models exist
+  if (refs.shiftId) {
+    const exists = await Shift.exists({ _id: refs.shiftId, organizationId });
+    if (!exists) {
+      throw new BadRequestError('Shift does not belong to this organization');
+    }
+  }
+
   for (const [key, id] of Object.entries(refs)) {
-    if (key === 'attendancePolicyId' || !id) continue;
+    if (key === 'attendancePolicyId' || key === 'shiftId' || !id) continue;
     if (!mongoose.Types.ObjectId.isValid(id)) {
       throw new BadRequestError(`Invalid ${key}`);
     }
@@ -235,19 +261,18 @@ export async function assertSameOrgRefs(
 }
 
 export function buildDefaultWeekRules(): WeekRule[] {
-  return ALL_WEEK_DAYS.map((day) => ({
-    day,
-    dayType:
-      day === WeekDay.SAT || day === WeekDay.SUN
-        ? day === WeekDay.SUN
-          ? PolicyDayType.WEEKLY_OFF
-          : PolicyDayType.FULL_DAY
-        : PolicyDayType.FULL_DAY,
-    useDefaultTiming: true,
-    ...(day === WeekDay.SUN ? {} : {}),
-  })).map((rule) =>
-    rule.day === WeekDay.SUN
-      ? { ...rule, dayType: PolicyDayType.WEEKLY_OFF, useDefaultTiming: false }
-      : rule
-  );
+  return ALL_WEEK_DAYS.map((day) => {
+    if (day === WeekDay.SUN || day === WeekDay.SAT) {
+      return {
+        day,
+        dayType: PolicyDayType.WEEKLY_OFF,
+        useShiftTiming: false,
+      };
+    }
+    return {
+      day,
+      dayType: PolicyDayType.FULL_DAY,
+      useShiftTiming: true,
+    };
+  });
 }

@@ -1,5 +1,4 @@
 import Attendance, { AttendanceStatus } from '../models/Attendance';
-import AttendancePolicy from '../models/AttendancePolicy';
 import Leave, { LeaveStatus } from '../models/Leave';
 import User, { UserRole } from '../models/User';
 import { startOfDay, endOfDay, format } from 'date-fns';
@@ -12,7 +11,7 @@ import {
   isPolicyWorkingDay,
 } from '../utils/attendanceAbsence';
 import { attendanceResolver, mapResolvedToAttendanceStatus } from './attendanceResolver';
-import { attendancePolicyService } from './attendancePolicyService';
+import { shiftService } from './shiftService';
 
 const CHECKIN_PHOTO_TTL_SEC = 86400;
 
@@ -190,29 +189,44 @@ export class AttendanceService {
   async getMyPolicySummary(userId: string): Promise<any> {
     const [resolved, user] = await Promise.all([
       attendanceResolver.resolveToday(userId),
-      User.findById(userId).select('attendancePolicyId organizationId').lean(),
+      User.findById(userId).select('attendancePolicyId organizationId department').lean(),
     ]);
 
     if (!user?.organizationId) {
       return resolved;
     }
 
-    const organizationId = user.organizationId.toString();
-    const assignedPolicy = user.attendancePolicyId
-      ? await AttendancePolicy.findOne({
-          _id: user.attendancePolicyId,
-          organizationId,
-          status: 'ACTIVE',
-        }).lean()
-      : null;
+    const { resolveUserAttendancePolicy } = await import('../utils/resolveUserAttendancePolicy');
+    const policy = await resolveUserAttendancePolicy(user);
 
-    const policy =
-      assignedPolicy ?? (await attendancePolicyService.getDefaultPolicy(organizationId));
+    let shift: {
+      shiftName: string;
+      startTime: string;
+      endTime: string;
+      expectedHours: number;
+    } | null = null;
+
+    if (policy?.shiftId) {
+      const shiftDoc = await shiftService.getShiftById(
+        policy.shiftId.toString(),
+        user.organizationId.toString()
+      );
+      if (shiftDoc) {
+        shift = {
+          shiftName: shiftDoc.shiftName,
+          startTime: shiftDoc.startTime,
+          endTime: shiftDoc.endTime,
+          expectedHours: shiftDoc.expectedHours,
+        };
+      }
+    }
 
     return {
       ...resolved,
+      policyName: policy?.policyName ?? resolved.policyName,
       weekRules: policy?.weekRules ?? [],
-      defaultFullDayRule: policy?.defaultFullDayRule,
+      shiftId: policy?.shiftId?.toString?.() ?? resolved.shiftId,
+      shift,
     };
   }
 
@@ -336,7 +350,6 @@ export class AttendanceService {
       status?: AttendanceStatus;
       department?: string;
       attendancePolicyId?: string;
-      shiftId?: string;
       dayType?: string;
     },
     page: number = 1,
@@ -359,13 +372,12 @@ export class AttendanceService {
       query.status = filters.status;
     }
 
-    // Department / policy / shift filter via User lookup
+    // Department / policy filter via User lookup
     const userFilter: Record<string, unknown> = { organizationId };
     if (filters.department) userFilter.department = filters.department;
     if (filters.attendancePolicyId) userFilter.attendancePolicyId = filters.attendancePolicyId;
-    if (filters.shiftId) userFilter.shiftId = filters.shiftId;
 
-    if (filters.department || filters.attendancePolicyId || filters.shiftId) {
+    if (filters.department || filters.attendancePolicyId) {
       const matchedUsers = await User.find(userFilter).select('_id');
       query.userId = { $in: matchedUsers.map((u) => u._id) };
     }
