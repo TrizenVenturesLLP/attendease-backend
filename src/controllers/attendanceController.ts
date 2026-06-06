@@ -153,6 +153,7 @@ export class AttendanceController {
         endDate,
         status,
         department,
+        userId,
         attendancePolicyId,
         shiftId,
         dayType,
@@ -166,6 +167,7 @@ export class AttendanceController {
       if (endDate) filters.endDate = parseLocalDateInput(endDate as string);
       if (status) filters.status = status as AttendanceStatus;
       if (department) filters.department = department as string;
+      if (userId) filters.userId = userId as string;
       if (attendancePolicyId) filters.attendancePolicyId = attendancePolicyId as string;
       if (shiftId) filters.shiftId = shiftId as string;
       if (dayType) filters.dayType = dayType as string;

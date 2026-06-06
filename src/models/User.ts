@@ -173,6 +173,7 @@ const UserSchema = new Schema<IUser>(
     profilePicture: {
       type: String,
       required: false,
+    },
     profilePhotoKey: {
       type: String,
       trim: true,

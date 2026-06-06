@@ -335,6 +335,7 @@ export class AttendanceService {
       endDate?: Date;
       status?: AttendanceStatus;
       department?: string;
+      userId?: string;
       attendancePolicyId?: string;
       shiftId?: string;
       dayType?: string;
@@ -365,9 +366,20 @@ export class AttendanceService {
     if (filters.attendancePolicyId) userFilter.attendancePolicyId = filters.attendancePolicyId;
     if (filters.shiftId) userFilter.shiftId = filters.shiftId;
 
+    let matchedUserIds: string[] | null = null;
     if (filters.department || filters.attendancePolicyId || filters.shiftId) {
       const matchedUsers = await User.find(userFilter).select('_id');
-      query.userId = { $in: matchedUsers.map((u) => u._id) };
+      matchedUserIds = matchedUsers.map((u) => u._id.toString());
+    }
+
+    if (filters.userId) {
+      if (matchedUserIds) {
+        query.userId = matchedUserIds.includes(filters.userId) ? filters.userId : { $in: [] };
+      } else {
+        query.userId = filters.userId;
+      }
+    } else if (matchedUserIds) {
+      query.userId = { $in: matchedUserIds };
     }
 
     const skip = (page - 1) * limit;

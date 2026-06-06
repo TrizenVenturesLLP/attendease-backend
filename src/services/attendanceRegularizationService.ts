@@ -198,8 +198,8 @@ export class AttendanceRegularizationService {
 
   async getPendingRequests(
     organizationId: string,
-    _reviewerId: string,
-    _reviewerRole: string,
+    reviewerId: string,
+    reviewerRole: string,
     page = 1,
     limit = 50
   ): Promise<{ records: IAttendanceRegularization[]; pagination: object }> {
@@ -208,10 +208,16 @@ export class AttendanceRegularizationService {
       status: RegularizationStatus.PENDING,
     };
 
+    // HR users cannot action their own regularization requests.
+    // Exclude them from HR's pending queue so only Admin can see & act on them.
+    if (reviewerRole === 'hr') {
+      query.userId = { $ne: new mongoose.Types.ObjectId(reviewerId) };
+    }
+
     const skip = (page - 1) * limit;
     const [records, total] = await Promise.all([
       AttendanceRegularization.find(query)
-        .populate('userId', 'firstName lastName email employeeId department')
+        .populate('userId', 'firstName lastName email employeeId department role')
         .sort({ date: -1 })
         .skip(skip)
         .limit(limit)
@@ -263,7 +269,7 @@ export class AttendanceRegularizationService {
   async approveRequest(
     requestId: string,
     reviewerId: string,
-    _reviewerRole: string,
+    reviewerRole: string,
     overrides?: ApproveRegularizationOverrides
   ): Promise<IAttendanceRegularization> {
     const request = await AttendanceRegularization.findById(requestId);
@@ -271,7 +277,11 @@ export class AttendanceRegularizationService {
       throw new Error('Regularization request not found');
     }
     if (request.status !== RegularizationStatus.PENDING) {
-      throw new Error('Request is not pending');
+      throw new Error('This request has already been reviewed and cannot be changed');
+    }
+    // HR cannot approve their own regularization request — only Admin can
+    if (reviewerRole === 'hr' && request.userId.toString() === reviewerId) {
+      throw new Error('You cannot approve your own regularization request');
     }
 
     const date = startOfDay(request.date);
@@ -307,7 +317,7 @@ export class AttendanceRegularizationService {
   async rejectRequest(
     requestId: string,
     reviewerId: string,
-    _reviewerRole: string,
+    reviewerRole: string,
     reviewNotes: string
   ): Promise<IAttendanceRegularization> {
     const request = await AttendanceRegularization.findById(requestId);
@@ -315,7 +325,11 @@ export class AttendanceRegularizationService {
       throw new Error('Regularization request not found');
     }
     if (request.status !== RegularizationStatus.PENDING) {
-      throw new Error('Request is not pending');
+      throw new Error('This request has already been reviewed and cannot be changed');
+    }
+    // HR cannot reject their own regularization request — only Admin can
+    if (reviewerRole === 'hr' && request.userId.toString() === reviewerId) {
+      throw new Error('You cannot reject your own regularization request');
     }
 
     request.status = RegularizationStatus.REJECTED;
