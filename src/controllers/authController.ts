@@ -171,15 +171,42 @@ class AuthController {
   }
 
   /**
+   * @route   GET /api/auth/demo-invite/validate
+   * @desc    Validate demo invitation token before set-password
+   * @access  Public
+   */
+  async validateDemoInvite(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const token = String(req.query.token || '');
+      const data = await authService.validateDemoInviteToken(token);
+
+      const response: ApiResponse = {
+        success: true,
+        message: 'Demo invitation is valid',
+        data,
+        timestamp: new Date().toISOString(),
+      };
+
+      res.status(200).json(response);
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  /**
    * @route   POST /api/auth/accept-invitation
    * @desc    Set password from email invitation link
    * @access  Public
    */
   async acceptInvitation(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
-      const { email, organizationId, password } = req.body;
+      const { email, organizationId, password, token } = req.body;
 
-      await authService.acceptInvitation(email, organizationId, password);
+      if (token) {
+        await authService.acceptInvitation({ token, password });
+      } else {
+        await authService.acceptInvitation({ email, organizationId, password });
+      }
 
       const response: ApiResponse = {
         success: true,

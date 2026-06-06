@@ -12,6 +12,7 @@ import payrollRoutes from './payroll.routes';
 import notificationRoutes from './notification.routes';
 import attendancePolicyRoutes from './attendancePolicy.routes';
 import shiftRoutes from './shift.routes';
+import platformRoutes from './platform.routes';
 
 const router = Router();
 
@@ -30,5 +31,6 @@ router.use('/payroll', payrollRoutes);
 router.use('/notifications', notificationRoutes);
 router.use('/attendance-policies', attendancePolicyRoutes);
 router.use('/shifts', shiftRoutes);
+router.use('/platform', platformRoutes);
 
 export default router;

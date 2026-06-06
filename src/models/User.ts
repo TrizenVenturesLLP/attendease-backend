@@ -49,6 +49,8 @@ export interface IUser extends Document {
   leavePolicyId?: mongoose.Types.ObjectId;
   payrollPolicyId?: mongoose.Types.ObjectId;
   joiningDate?: Date;
+  /** Demo access window end — set when a demo invitation is accepted. */
+  demoAccessExpiresAt?: Date;
   createdAt: Date;
   updatedAt: Date;
   fullName: string;
@@ -186,6 +188,9 @@ const UserSchema = new Schema<IUser>(
       sparse: true,
     },
     joiningDate: {
+      type: Date,
+    },
+    demoAccessExpiresAt: {
       type: Date,
     },
   },

@@ -2,7 +2,7 @@ import axios from 'axios';
 import config from '../config';
 import Organization from '../models/Organization';
 import User, { UserRole } from '../models/User';
-import { buildSetPasswordBaseUrl } from '../utils/inviteUrl';
+import { buildSetPasswordBaseUrl, buildDemoInviteLink } from '../utils/inviteUrl';
 import { logger } from '../utils/logger';
 
 interface OrganizationCreatedEmailInput {
@@ -310,6 +310,70 @@ class EmailNotificationService {
         to: input.email,
         mappedRole,
       });
+      throw error;
+    }
+  }
+
+  async sendDemoInvitation(input: {
+    email: string;
+    role: UserRole;
+    organizationId: string;
+    companyName: string;
+    rawToken: string;
+    inviteExpiresAt: Date;
+    demoAccessTtlDays: number;
+    invitedByUserId: string;
+    firstName?: string;
+    lastName?: string;
+    subdomain?: string;
+  }): Promise<void> {
+    if (!this.isEmailConfigured()) {
+      this.warnEmailSkipped('demo-invitation');
+      return;
+    }
+
+    const endpoint = `${config.emailService.url}/api/v1/email/demo-invitation`;
+
+    if (!config.emailService.authToken) {
+      logger.warn('Demo invitation skipped: EMAIL_SERVICE_AUTH_TOKEN not set');
+      return;
+    }
+
+    const inviteLink = buildDemoInviteLink(input.rawToken, input.subdomain);
+    const mappedRole = this.mapRoleForEmailService(input.role);
+    const name = [input.firstName, input.lastName].filter(Boolean).join(' ').trim() || undefined;
+
+    logger.info('Sending demo invitation email', {
+      endpoint,
+      to: input.email,
+      companyName: input.companyName,
+      inviteLink,
+    });
+
+    try {
+      await axios.post(
+        endpoint,
+        {
+          email: input.email,
+          role: mappedRole,
+          inviteLink,
+          inviteExpiresAt: input.inviteExpiresAt.toISOString(),
+          demoAccessTtlDays: input.demoAccessTtlDays,
+          companyName: input.companyName,
+          inviterName: 'Trizen HR Demo Team',
+          platformName: 'TrizenHR Demo',
+          name,
+          supportEmail: config.emailService.platformSupportEmail,
+        },
+        {
+          headers: this.getHeaders(input.invitedByUserId),
+          timeout: 10000,
+        }
+      );
+
+      logger.info('Demo invitation email API OK', { to: input.email });
+    } catch (error) {
+      logger.error('Demo invitation email failed', formatAxiosError(error));
       throw error;
     }
   }
