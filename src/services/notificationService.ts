@@ -187,7 +187,7 @@ export class NotificationService {
             id: `leave-pending:${lid}`,
             type: 'leave_pending',
             title: 'Leave approval needed',
-            body: `${name} requested leave (${row.leaveType}, ${row.totalDays} day(s)).`,
+            body: `${name} requested leave (${(row.leaveTypeId as { name?: string })?.name ?? 'leave'}, ${row.totalDays} day(s)).`,
             href: '/dashboard/leave-approvals',
             createdAt: toIso(row.createdAt as Date),
           });
@@ -231,22 +231,25 @@ export class NotificationService {
         const outcomes = await Leave.find({
           organizationId: orgId,
           userId: userId,
-          status: { $in: [LeaveStatus.APPROVED, LeaveStatus.REJECTED] },
+          status: { $in: [LeaveStatus.APPROVED, LeaveStatus.REJECTED, 'approved', 'rejected'] },
           updatedAt: { $gte: since },
         })
+          .populate('leaveTypeId', 'name')
           .sort({ updatedAt: -1 })
           .limit(12)
           .lean();
 
         for (const row of outcomes) {
-          const statusLabel = row.status === LeaveStatus.APPROVED ? 'approved' : 'rejected';
+          const statusLabel =
+            String(row.status).toUpperCase() === LeaveStatus.APPROVED ? 'approved' : 'rejected';
+          const typeName = (row.leaveTypeId as { name?: string })?.name ?? 'leave';
           items.push({
             id: `leave-outcome:${row._id}`,
             type: 'leave_outcome',
             title: `Leave request ${statusLabel}`,
-            body: `Your ${row.leaveType} leave (${row.totalDays} day(s)) was ${statusLabel}.`,
+            body: `Your ${typeName} leave (${row.totalDays} day(s)) was ${statusLabel}.`,
             href: '/dashboard/my-leave',
-            createdAt: toIso((row.reviewedAt as Date) || (row.updatedAt as Date)),
+            createdAt: toIso(row.updatedAt as Date),
           });
         }
       }

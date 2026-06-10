@@ -73,7 +73,7 @@ class DashboardService {
     // Pending leave approvals (scoped to same user set for HR)
     const leaveQuery: any = {
       organizationId: organizationId!,
-      status: 'pending',
+      status: { $in: ['PENDING', 'PARTIALLY_APPROVED', 'pending'] },
     };
     if (requesterRole === UserRole.HR && userIds.length > 0) {
       leaveQuery.userId = { $in: users.map((u) => u._id) };
@@ -108,7 +108,7 @@ class DashboardService {
     const teamPendingLeaves = await Leave.find({
       organizationId: organizationId!,
       userId: { $in: teamMembers.map(m => m._id) },
-      status: 'pending'
+      status: { $in: ['PENDING', 'PARTIALLY_APPROVED', 'pending'] },
     }).lean();
     const pendingLeaveApprovals = teamPendingLeaves.length;
 

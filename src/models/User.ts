@@ -181,6 +181,7 @@ const UserSchema = new Schema<IUser>(
     },
     leavePolicyId: {
       type: Schema.Types.ObjectId,
+      ref: 'LeavePolicy',
       sparse: true,
     },
     payrollPolicyId: {

@@ -46,7 +46,7 @@ const DepartmentSchema = new Schema<IDepartment>(
       type: Schema.Types.ObjectId,
       ref: 'AttendancePolicy',
     },
-    defaultLeavePolicyId: { type: Schema.Types.ObjectId, sparse: true },
+    defaultLeavePolicyId: { type: Schema.Types.ObjectId, ref: 'LeavePolicy', sparse: true },
     defaultPayrollPolicyId: { type: Schema.Types.ObjectId, sparse: true },
   },
   {
