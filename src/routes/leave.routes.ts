@@ -15,7 +15,9 @@ router.use(tenantContext, allowOrganizationOverride);
 router.post('/request', leaveController.requestLeave.bind(leaveController));
 router.get('/my-leaves', leaveController.getMyLeaves.bind(leaveController));
 router.get('/my-balance', leaveController.getMyBalance.bind(leaveController));
+router.get('/preview-days', leaveController.previewLeaveDays.bind(leaveController));
 router.get('/calendar', leaveController.getCalendarLeaves.bind(leaveController));
+router.get('/:id/attachment', leaveController.getLeaveAttachment.bind(leaveController));
 router.get('/:id/approvals', leaveController.getLeaveApprovals.bind(leaveController));
 router.patch('/:id/cancel', leaveController.cancelLeave.bind(leaveController));
 

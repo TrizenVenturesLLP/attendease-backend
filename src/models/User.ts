@@ -51,6 +51,9 @@ export interface IUser extends Document {
   joiningDate?: Date;
   /** Demo access window end — set when a demo invitation is accepted. */
   demoAccessExpiresAt?: Date;
+  /** True until the user completes the email invitation set-password flow. */
+  invitationPending?: boolean;
+  invitationAcceptedAt?: Date;
   createdAt: Date;
   updatedAt: Date;
   fullName: string;
@@ -192,6 +195,13 @@ const UserSchema = new Schema<IUser>(
       type: Date,
     },
     demoAccessExpiresAt: {
+      type: Date,
+    },
+    invitationPending: {
+      type: Boolean,
+      default: false,
+    },
+    invitationAcceptedAt: {
       type: Date,
     },
   },

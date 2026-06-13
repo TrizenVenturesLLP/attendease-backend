@@ -32,7 +32,7 @@ router.put(
 
 router.patch(
   '/:id/default-policies',
-  authorize('admin', 'super_admin', 'hr'),
+  authorize('admin', 'super_admin'),
   departmentController.updateDefaultPolicies.bind(departmentController)
 );
 
@@ -42,16 +42,16 @@ router.delete(
   departmentController.deleteDepartment.bind(departmentController)
 );
 
-// Member management - Admin/Super Admin only (HR cannot manage)
+// Member management - Admin/Super Admin/HR (assign & transfer employees)
 router.post(
   '/:id/members',
-  authorize('admin', 'super_admin'),
+  authorize('admin', 'super_admin', 'hr'),
   departmentController.addMember.bind(departmentController)
 );
 
 router.delete(
   '/:id/members/:userId',
-  authorize('admin', 'super_admin'),
+  authorize('admin', 'super_admin', 'hr'),
   departmentController.removeMember.bind(departmentController)
 );
 

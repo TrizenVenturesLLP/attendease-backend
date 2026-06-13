@@ -1,5 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import authService from '../services/authService';
+import demoRequestService from '../services/demoRequestService';
+import { DemoRequestSource } from '../models/DemoRequest';
 import { ApiResponse } from '../utils/ApiResponse';
 import { BadRequestError, ForbiddenError } from '../utils/AppError';
 
@@ -183,6 +185,30 @@ class AuthController {
       const response: ApiResponse = {
         success: true,
         message: 'Demo invitation is valid',
+        data,
+        timestamp: new Date().toISOString(),
+      };
+
+      res.status(200).json(response);
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  /**
+   * @route   GET /api/auth/invitation/validate
+   * @desc    Validate organization invitation link before set-password
+   * @access  Public
+   */
+  async validateOrgInvitation(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const email = String(req.query.email || '');
+      const organizationId = String(req.query.organizationId || '');
+      const data = await authService.validateOrgInvitation(email, organizationId);
+
+      const response: ApiResponse = {
+        success: true,
+        message: 'Invitation is valid',
         data,
         timestamp: new Date().toISOString(),
       };
@@ -383,6 +409,39 @@ class AuthController {
       };
 
       res.status(200).json(response);
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  /**
+   * @route   POST /api/auth/demo-request
+   * @desc    Submit a public demo booking request
+   * @access  Public
+   */
+  async requestDemo(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const { name, email, company, phone, message, source } = req.body;
+      const normalizedSource =
+        source === DemoRequestSource.MOBILE ? DemoRequestSource.MOBILE : DemoRequestSource.WEB;
+
+      const data = await demoRequestService.create({
+        name,
+        email,
+        company,
+        phone,
+        message,
+        source: normalizedSource,
+      });
+
+      const response: ApiResponse = {
+        success: true,
+        message: 'Demo request received. Our team will contact you within 24 hours.',
+        data,
+        timestamp: new Date().toISOString(),
+      };
+
+      res.status(201).json(response);
     } catch (error) {
       next(error);
     }

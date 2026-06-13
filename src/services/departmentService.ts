@@ -2,6 +2,7 @@ import Department, { IDepartment } from '../models/Department';
 import User from '../models/User';
 import mongoose from 'mongoose';
 import AttendancePolicy, { PolicyStatus } from '../models/AttendancePolicy';
+import LeavePolicy, { LeavePolicyStatus } from '../models/LeavePolicy';
 import { BadRequestError } from '../utils/AppError';
 
 type DepartmentPolicyFields = {
@@ -25,6 +26,20 @@ export class DepartmentService {
     }
   }
 
+  private async validateLeavePolicy(
+    organizationId: string,
+    policyId: string
+  ): Promise<void> {
+    const policy = await LeavePolicy.findOne({
+      _id: policyId,
+      organizationId: new mongoose.Types.ObjectId(organizationId),
+      status: LeavePolicyStatus.ACTIVE,
+    });
+    if (!policy) {
+      throw new BadRequestError('Active leave policy not found in this organization');
+    }
+  }
+
   private async resolvePolicyFields(
     organizationId: string,
     policies: DepartmentPolicyFields
@@ -41,6 +56,7 @@ export class DepartmentService {
     }
 
     if (policies.defaultLeavePolicyId) {
+      await this.validateLeavePolicy(organizationId, policies.defaultLeavePolicyId);
       result.defaultLeavePolicyId = new mongoose.Types.ObjectId(policies.defaultLeavePolicyId);
     } else if (policies.defaultLeavePolicyId === null) {
       result.defaultLeavePolicyId = null;
@@ -114,20 +130,52 @@ export class DepartmentService {
     name: string,
     description?: string,
     headOfDepartment?: string,
-    policies: DepartmentPolicyFields = {}
+    policies: DepartmentPolicyFields = {},
+    memberIds: string[] = []
   ): Promise<IDepartment> {
     const policyFields = await this.resolvePolicyFields(organizationId, policies);
+
+    const uniqueMemberIds = [
+      ...new Set(memberIds.filter((id) => mongoose.Types.ObjectId.isValid(id))),
+    ];
+
+    if (uniqueMemberIds.length) {
+      const memberObjectIds = uniqueMemberIds.map((id) => new mongoose.Types.ObjectId(id));
+      const count = await User.countDocuments({
+        _id: { $in: memberObjectIds },
+        organizationId: new mongoose.Types.ObjectId(organizationId),
+      });
+      if (count !== uniqueMemberIds.length) {
+        throw new BadRequestError(
+          'One or more selected members were not found in this organization'
+        );
+      }
+    }
+
+    const memberObjectIds = uniqueMemberIds.map((id) => new mongoose.Types.ObjectId(id));
 
     const department = await Department.create({
       organizationId,
       name,
       description,
       headOfDepartment: headOfDepartment ? new mongoose.Types.ObjectId(headOfDepartment) : undefined,
-      members: [],
+      members: memberObjectIds,
       ...policyFields,
     });
 
-    return department;
+    if (memberObjectIds.length) {
+      const userUpdate: Record<string, unknown> = { department: department.name };
+      const deptDefaults = this.applyDepartmentLeavePayrollDefaults(department);
+      Object.assign(userUpdate, deptDefaults);
+      await User.updateMany({ _id: { $in: memberObjectIds } }, { $set: userUpdate });
+    }
+
+    const populated = await this.getDepartmentById(department._id.toString(), organizationId);
+    if (!populated) {
+      throw new BadRequestError('Failed to load created department');
+    }
+
+    return populated;
   }
 
   async getAllDepartments(organizationId?: string): Promise<IDepartment[]> {
@@ -140,6 +188,7 @@ export class DepartmentService {
       .populate('headOfDepartment', 'firstName lastName email')
       .populate('members', 'firstName lastName email employeeId')
       .populate('departmentAttendancePolicyId', 'policyName status')
+      .populate('defaultLeavePolicyId', 'policyName status')
       .sort({ name: 1 })
       .lean();
 
@@ -156,6 +205,7 @@ export class DepartmentService {
       .populate('headOfDepartment', 'firstName lastName email')
       .populate('members', 'firstName lastName email employeeId')
       .populate('departmentAttendancePolicyId', 'policyName status')
+      .populate('defaultLeavePolicyId', 'policyName status')
       .lean();
 
     return department;
@@ -211,7 +261,8 @@ export class DepartmentService {
     )
       .populate('headOfDepartment', 'firstName lastName email')
       .populate('members', 'firstName lastName email employeeId')
-      .populate('departmentAttendancePolicyId', 'policyName status');
+      .populate('departmentAttendancePolicyId', 'policyName status')
+      .populate('defaultLeavePolicyId', 'policyName status');
 
     if (department && updates.departmentAttendancePolicyId !== undefined) {
       const memberIds = this.getMemberObjectIds(existing.members as unknown[]);

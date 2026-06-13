@@ -11,6 +11,11 @@ import userService from './userService';
 import platformSettingsService from './platformSettingsService';
 import emailNotificationService from './emailNotificationService';
 import { departmentService } from './departmentService';
+import {
+  assertEmailAvailableForInvitation,
+  validateDemoInvitationEmail,
+  markInvitationAccepted,
+} from './invitationValidationService';
 import { generateDemoInviteToken, hashDemoInviteToken } from '../utils/demoInviteToken';
 import {
   BadRequestError,
@@ -440,6 +445,8 @@ class DemoInvitationService {
         ? undefined
         : await this.ensureDemoDepartment(organizationId!);
 
+    await assertEmailAvailableForInvitation(normalizedEmail);
+
     const user = await userService.createUser(
       {
         organizationId: organizationId!,
@@ -720,6 +727,8 @@ class DemoInvitationService {
       throw new BadRequestError('This demo environment is no longer available');
     }
 
+    await validateDemoInvitationEmail(invite.email, invite.userId?.toString());
+
     return {
       email: invite.email,
       role: invite.role,
@@ -770,13 +779,15 @@ class DemoInvitationService {
       throw new NotFoundError('Demo user account not found');
     }
 
+    await validateDemoInvitationEmail(invite.email, invite.userId?.toString());
+
     user.password = password;
     user.isActive = true;
 
     const now = new Date();
     const demoAccessExpiresAt = addDays(now, invite.demoAccessTtlDays);
     user.demoAccessExpiresAt = demoAccessExpiresAt;
-    await user.save();
+    await markInvitationAccepted(user);
 
     invite.status = DemoInvitationStatus.ACCEPTED;
     invite.acceptedAt = now;

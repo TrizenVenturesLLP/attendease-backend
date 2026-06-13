@@ -423,3 +423,8 @@ export const checkInMinioStorage = new MinIOStorage({
     'attendence-image-checkin',
   privateBucket: true,
 });
+
+export const leaveMinioStorage = new MinIOStorage({
+  bucketName: process.env.MINIO_LEAVE_BUCKET_NAME || 'leave-attachments',
+  privateBucket: true,
+});

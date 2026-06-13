@@ -1,5 +1,4 @@
 import jwt from 'jsonwebtoken';
-import mongoose from 'mongoose';
 import config from '../config';
 import User, { IUser, AuthProvider, UserRole } from '../models/User';
 import Organization from '../models/Organization';
@@ -15,6 +14,10 @@ import {
 import { JwtPayload } from '../utils/ApiResponse';
 import { profileMinioStorage } from '../utils/storage/MinIOStorage';
 import demoInvitationService from './demoInvitationService';
+import {
+  validateOrgInvitation as validateOrgInvitationLink,
+  markInvitationAccepted,
+} from './invitationValidationService';
 
 export interface ClientUser {
   id: string;
@@ -305,6 +308,13 @@ class AuthService {
   }
 
   /**
+   * Validate org invitation link (public — for set-password page).
+   */
+  async validateOrgInvitation(email: string, organizationId: string) {
+    return validateOrgInvitationLink(email, organizationId);
+  }
+
+  /**
    * Validate a demo invitation token (public — for set-password page).
    */
   async validateDemoInviteToken(rawToken: string) {
@@ -334,9 +344,7 @@ class AuthService {
       throw new BadRequestError('Password must be at least 6 characters');
     }
 
-    if (!mongoose.Types.ObjectId.isValid(organizationId)) {
-      throw new BadRequestError('Invalid organization ID');
-    }
+    await validateOrgInvitationLink(email, organizationId);
 
     const normalizedEmail = email.trim().toLowerCase();
 
@@ -360,7 +368,7 @@ class AuthService {
     }
 
     user.password = password;
-    await user.save();
+    await markInvitationAccepted(user);
   }
 
   /**

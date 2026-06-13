@@ -18,6 +18,7 @@ import {
   ConflictError,
 } from '../utils/AppError';
 import { deleteUsersAndRelatedData } from './userCascadeDelete';
+import { assertEmailAvailableForInvitation } from './invitationValidationService';
 
 export interface CreateUserData {
   organizationId?: string;
@@ -421,7 +422,7 @@ class UserService {
       return this.reactivateOrgUser(existingInactiveUser, userData, createdByUserId);
     }
 
-    // Check if employeeId already exists within the same organization (active users only)
+    await assertEmailAvailableForInvitation(normalizedEmail);
     const existingEmployee = await User.findOne({
       employeeId: userData.employeeId,
       organizationId: userData.organizationId,
@@ -449,6 +450,7 @@ class UserService {
     await this.validatePolicyAssignments(userData.organizationId, withDefaults);
 
     // Invite flow: no password in request — user sets it via email link
+    const isInviteFlow = !userData.password?.trim();
     const password =
       userData.password?.trim() ||
       crypto.randomBytes(32).toString('hex');
@@ -457,6 +459,7 @@ class UserService {
       ...withDefaults,
       email: normalizedEmail,
       password,
+      invitationPending: isInviteFlow,
       createdBy: createdByUserId,
       attendancePolicyId: withDefaults.attendancePolicyId
         ? new mongoose.Types.ObjectId(withDefaults.attendancePolicyId)

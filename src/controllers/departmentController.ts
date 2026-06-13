@@ -14,6 +14,7 @@ export class DepartmentController {
         departmentAttendancePolicyId,
         defaultLeavePolicyId,
         defaultPayrollPolicyId,
+        memberIds,
       } = req.body;
 
       if (!name) {
@@ -43,7 +44,8 @@ export class DepartmentController {
           departmentAttendancePolicyId,
           defaultLeavePolicyId,
           defaultPayrollPolicyId,
-        }
+        },
+        Array.isArray(memberIds) ? memberIds : []
       );
 
       res.status(201).json({

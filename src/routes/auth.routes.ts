@@ -19,6 +19,13 @@ router.post('/login', authController.login);
 router.post('/accept-invitation', authController.acceptInvitation);
 
 /**
+ * @route   GET /api/auth/invitation/validate
+ * @desc    Validate organization invitation (email + organizationId)
+ * @access  Public
+ */
+router.get('/invitation/validate', authController.validateOrgInvitation);
+
+/**
  * @route   GET /api/auth/demo-invite/validate
  * @desc    Validate demo invitation token
  * @access  Public
@@ -27,6 +34,13 @@ router.get('/demo-invite/validate', authController.validateDemoInvite);
 
 router.post('/forgot-password', authController.forgotPassword);
 router.post('/reset-password', authController.resetPassword);
+
+/**
+ * @route   POST /api/auth/demo-request
+ * @desc    Submit a public demo booking request
+ * @access  Public
+ */
+router.post('/demo-request', authController.requestDemo);
 
 /**
  * @route   GET /api/auth/microsoft/url

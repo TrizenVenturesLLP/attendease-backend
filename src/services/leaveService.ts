@@ -23,6 +23,10 @@ import {
   resolveRefId,
 } from '../utils/leaveWorkflowUtils';
 import { leavePolicyService } from './leavePolicyService';
+import { leaveMinioStorage } from '../utils/storage/MinIOStorage';
+import { ForbiddenError, NotFoundError } from '../utils/AppError';
+
+const LEAVE_ATTACHMENT_MAX_BYTES = 5 * 1024 * 1024;
 
 export class LeaveService {
   private async getUserContext(userId: string) {
@@ -168,6 +172,103 @@ export class LeaveService {
     }
   }
 
+  private async uploadLeaveAttachment(
+    userId: string,
+    organizationId: string,
+    fileData: string
+  ): Promise<string> {
+    const trimmed = fileData.trim();
+    const base64Data = trimmed.replace(/^data:[^;]+;base64,/, '');
+    if (!base64Data) {
+      throw new Error('Invalid attachment data');
+    }
+
+    const buffer = Buffer.from(base64Data, 'base64');
+    if (buffer.length > LEAVE_ATTACHMENT_MAX_BYTES) {
+      throw new Error('Attachment must be under 5MB');
+    }
+
+    const mimeMatch = trimmed.match(/^data:([^;]+);base64,/);
+    const contentType = mimeMatch?.[1] || 'image/jpeg';
+    const extMap: Record<string, string> = {
+      'application/pdf': 'pdf',
+      'image/jpeg': 'jpg',
+      'image/png': 'png',
+      'image/webp': 'webp',
+      'application/msword': 'doc',
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'docx',
+      'text/plain': 'txt',
+    };
+    const ext = extMap[contentType] || contentType.split('/')[1]?.replace(/[^a-z0-9]/gi, '') || 'bin';
+    const folder = `org-${organizationId}/users/${userId}/leave-attachments`;
+    const fileName = `leave_${Date.now()}.${ext.replace(/[^a-z0-9]/gi, '')}`;
+
+    const result = await leaveMinioStorage.uploadFile(
+      buffer,
+      fileName,
+      contentType,
+      folder,
+      { userId, type: 'leave-attachment' }
+    );
+
+    return result.key;
+  }
+
+  private resolveAttachmentKey(attachmentRef: string): string {
+    const trimmed = attachmentRef.trim();
+    if (!trimmed.includes('://')) return trimmed;
+
+    try {
+      const url = new URL(trimmed);
+      const path = url.pathname.replace(/^\/+/, '');
+      const bucket =
+        process.env.MINIO_LEAVE_BUCKET_NAME || 'leave-attachments';
+      if (path.startsWith(`${bucket}/`)) {
+        return path.slice(bucket.length + 1);
+      }
+      const segments = path.split('/');
+      if (segments[0] === bucket) {
+        return segments.slice(1).join('/');
+      }
+      return path;
+    } catch {
+      return trimmed;
+    }
+  }
+
+  async getLeaveAttachmentBuffer(
+    leaveId: string,
+    requesterId: string,
+    requesterRole: string,
+    organizationId: string
+  ): Promise<{ buffer: Buffer; contentType: string }> {
+    const leave = await Leave.findOne({ _id: leaveId, organizationId }).lean();
+    if (!leave) {
+      throw new NotFoundError('Leave request not found');
+    }
+    if (!leave.attachmentUrl?.trim()) {
+      throw new NotFoundError('No attachment found for this leave request');
+    }
+
+    const isOwner = resolveRefId(leave.userId) === requesterId;
+    const isHrOrAdmin = [UserRole.HR, UserRole.ADMIN, UserRole.SUPER_ADMIN].includes(
+      requesterRole as UserRole
+    );
+
+    let canView = isOwner || isHrOrAdmin;
+    if (!canView && requesterRole === UserRole.SUPERVISOR) {
+      const employee = await User.findById(leave.userId).select('supervisorId').lean();
+      canView = resolveRefId(employee?.supervisorId) === requesterId;
+    }
+
+    if (!canView) {
+      throw new ForbiddenError('You are not authorized to view this attachment');
+    }
+
+    const key = this.resolveAttachmentKey(leave.attachmentUrl);
+    return leaveMinioStorage.getObjectBuffer(key);
+  }
+
   private leavePopulateQuery() {
     return [
       { path: 'leaveTypeId', select: 'name code isPaid isOther requiresDocument' },
@@ -187,6 +288,7 @@ export class LeaveService {
     options?: {
       isHalfDay?: boolean;
       attachmentUrl?: string;
+      attachmentData?: string;
       otherLeaveTypeName?: string;
     }
   ): Promise<ILeave> {
@@ -218,6 +320,10 @@ export class LeaveService {
 
     if (options?.isHalfDay && !leaveType.allowHalfDay) {
       throw new Error('Half-day leave is not allowed for this leave type');
+    }
+
+    if (leaveType.requiresDocument && !options?.attachmentData?.trim() && !options?.attachmentUrl?.trim()) {
+      throw new Error(`A supporting document is required for ${leaveType.name}`);
     }
 
     const start = startOfDay(startDate);
@@ -255,6 +361,15 @@ export class LeaveService {
       throw new Error('Leave policy has no approval workflow configured');
     }
 
+    let attachmentUrl = options?.attachmentUrl?.trim();
+    if (options?.attachmentData?.trim()) {
+      attachmentUrl = await this.uploadLeaveAttachment(
+        userId,
+        organizationId,
+        options.attachmentData.trim()
+      );
+    }
+
     const leave = await Leave.create({
       userId,
       organizationId,
@@ -266,7 +381,7 @@ export class LeaveService {
       totalDays,
       isHalfDay: Boolean(options?.isHalfDay),
       reason: reason.trim(),
-      attachmentUrl: options?.attachmentUrl?.trim(),
+      attachmentUrl,
       workflowId,
       currentApprovalStep: 1,
       status: LeaveStatus.PENDING,
@@ -310,9 +425,35 @@ export class LeaveService {
     const targetYear = year || new Date().getFullYear();
     const balance = await this.getOrCreateLeaveBalance(userId, targetYear, organizationId);
     const populated = await LeaveBalance.findById(balance._id)
-      .populate('balances.leaveTypeId', 'name code isPaid isOther')
+      .populate('balances.leaveTypeId', 'name code isPaid isOther allowHalfDay requiresDocument')
       .lean();
     return populated;
+  }
+
+  async previewLeaveDays(
+    organizationId: string,
+    startDate: Date,
+    endDate: Date,
+    isHalfDay = false
+  ): Promise<{ workingDays: number; totalLeaveDays: number; includesOnlyNonWorkingDays: boolean }> {
+    const start = startOfDay(startDate);
+    const end = startOfDay(endDate);
+
+    if (end < start) {
+      return { workingDays: 0, totalLeaveDays: 0, includesOnlyNonWorkingDays: true };
+    }
+
+    const workingDays = await countOrganizationWorkingDaysInRange(organizationId, start, end);
+    let totalLeaveDays = workingDays;
+    if (isHalfDay && workingDays > 0) {
+      totalLeaveDays = 0.5;
+    }
+
+    return {
+      workingDays,
+      totalLeaveDays,
+      includesOnlyNonWorkingDays: workingDays === 0,
+    };
   }
 
   private async filterLeavesForReviewer(

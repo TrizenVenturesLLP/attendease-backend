@@ -1,8 +1,9 @@
 import { Request, Response } from 'express';
 import { leaveService } from '../services/leaveService';
 import { resolveOrganizationId } from '../utils/resolveOrganizationId';
-import { ForbiddenError } from '../utils/AppError';
+import { ForbiddenError, NotFoundError } from '../utils/AppError';
 import { normalizeLeaveStatus } from '../utils/leaveWorkflowUtils';
+import { parseLocalDateInput } from '../utils/dateInput';
 
 export class LeaveController {
   private async getOrganizationId(req: Request): Promise<string> {
@@ -39,6 +40,7 @@ export class LeaveController {
         reason,
         isHalfDay,
         attachmentUrl,
+        attachmentData,
         otherLeaveTypeName,
       } = req.body;
 
@@ -55,10 +57,10 @@ export class LeaveController {
         userId,
         organizationId,
         leaveTypeId,
-        new Date(startDate),
-        new Date(endDate),
+        parseLocalDateInput(startDate),
+        parseLocalDateInput(endDate),
         reason,
-        { isHalfDay, attachmentUrl, otherLeaveTypeName }
+        { isHalfDay, attachmentUrl, attachmentData, otherLeaveTypeName }
       );
 
       res.status(201).json({
@@ -68,6 +70,7 @@ export class LeaveController {
         timestamp: new Date().toISOString(),
       });
     } catch (error: any) {
+      console.error('Leave request failed:', error?.message || error);
       res.status(400).json({
         success: false,
         error: error.message || 'Failed to request leave',
@@ -129,6 +132,41 @@ export class LeaveController {
       });
     } catch (error: unknown) {
       this.handleError(res, error, 'Get balance error');
+    }
+  }
+
+  async previewLeaveDays(req: Request, res: Response): Promise<void> {
+    try {
+      const organizationId = await this.getOrganizationId(req);
+      const { startDate, endDate, isHalfDay } = req.query;
+
+      if (!startDate || !endDate) {
+        res.status(400).json({
+          success: false,
+          error: 'Start date and end date are required',
+          timestamp: new Date().toISOString(),
+        });
+        return;
+      }
+
+      const preview = await leaveService.previewLeaveDays(
+        organizationId,
+        parseLocalDateInput(String(startDate)),
+        parseLocalDateInput(String(endDate)),
+        String(isHalfDay).toLowerCase() === 'true'
+      );
+
+      res.status(200).json({
+        success: true,
+        data: preview,
+        timestamp: new Date().toISOString(),
+      });
+    } catch (error: any) {
+      res.status(400).json({
+        success: false,
+        error: error.message || 'Failed to preview leave days',
+        timestamp: new Date().toISOString(),
+      });
     }
   }
 
@@ -296,6 +334,31 @@ export class LeaveController {
         error: error.message || 'Failed to get leave approvals',
         timestamp: new Date().toISOString(),
       });
+    }
+  }
+
+  async getLeaveAttachment(req: Request, res: Response): Promise<void> {
+    try {
+      const organizationId = await this.getOrganizationId(req);
+      const { buffer, contentType } = await leaveService.getLeaveAttachmentBuffer(
+        req.params.id,
+        req.user!.userId,
+        req.user!.role,
+        organizationId
+      );
+      res.setHeader('Content-Type', contentType);
+      res.setHeader('Cache-Control', 'private, max-age=300');
+      res.status(200).send(buffer);
+    } catch (error: unknown) {
+      if (error instanceof NotFoundError) {
+        res.status(404).json({
+          success: false,
+          error: error.message,
+          timestamp: new Date().toISOString(),
+        });
+        return;
+      }
+      this.handleError(res, error, 'Failed to get leave attachment');
     }
   }
 
