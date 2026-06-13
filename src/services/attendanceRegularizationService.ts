@@ -326,7 +326,7 @@ export class AttendanceRegularizationService {
       throw new Error('You cannot approve your own regularization request');
     }
 
-    await this.assertReviewerCanActOnRequest(request, _reviewerRole);
+    await this.assertReviewerCanActOnRequest(request, reviewerRole);
 
     const date = startOfDay(request.date);
     if (overrides?.requestedCheckIn) {
@@ -376,7 +376,7 @@ export class AttendanceRegularizationService {
       throw new Error('You cannot reject your own regularization request');
     }
 
-    await this.assertReviewerCanActOnRequest(request, _reviewerRole);
+    await this.assertReviewerCanActOnRequest(request, reviewerRole);
 
     request.status = RegularizationStatus.REJECTED;
     request.reviewedBy = reviewerId as any;

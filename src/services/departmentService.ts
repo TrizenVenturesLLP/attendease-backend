@@ -98,6 +98,41 @@ export class DepartmentService {
     );
   }
 
+  private async updateMembersPolicyOnDepartmentChange(
+    organizationId: mongoose.Types.ObjectId,
+    departmentName: string,
+    memberIds: mongoose.Types.ObjectId[],
+    policyField: 'leavePolicyId' | 'payrollPolicyId',
+    previousPolicyId?: mongoose.Types.ObjectId | null,
+    newPolicyId?: mongoose.Types.ObjectId | null
+  ): Promise<void> {
+    const deptNameRegex = new RegExp(
+      `^${departmentName.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`,
+      'i'
+    );
+
+    // If new policy is provided, update members to use it
+    if (newPolicyId) {
+      await User.updateMany(
+        {
+          organizationId,
+          $or: [{ _id: { $in: memberIds } }, { department: deptNameRegex }],
+        },
+        { $set: { [policyField]: newPolicyId } }
+      );
+    } else if (previousPolicyId) {
+      // If no new policy, only clear for members who had the previous policy
+      await User.updateMany(
+        {
+          organizationId,
+          [policyField]: previousPolicyId,
+          $or: [{ _id: { $in: memberIds } }, { department: deptNameRegex }],
+        },
+        { $unset: { [policyField]: '' } }
+      );
+    }
+  }
+
   private applyDepartmentLeavePayrollDefaults(department: IDepartment): Record<string, mongoose.Types.ObjectId> {
     const update: Record<string, mongoose.Types.ObjectId> = {};
     if (department.defaultLeavePolicyId) {
@@ -140,10 +175,14 @@ export class DepartmentService {
       .populate('headOfDepartment', 'firstName lastName email')
       .populate('members', 'firstName lastName email employeeId')
       .populate('departmentAttendancePolicyId', 'policyName status')
+      .populate('defaultLeavePolicyId', 'policyName status')
       .sort({ name: 1 })
       .lean();
 
-    return departments;
+    return departments.map((d: any) => ({
+      ...d,
+      defaultAttendancePolicyId: d.departmentAttendancePolicyId,
+    })) as unknown as IDepartment[];
   }
 
   async getDepartmentById(id: string, organizationId?: string): Promise<IDepartment | null> {
@@ -156,7 +195,12 @@ export class DepartmentService {
       .populate('headOfDepartment', 'firstName lastName email')
       .populate('members', 'firstName lastName email employeeId')
       .populate('departmentAttendancePolicyId', 'policyName status')
+      .populate('defaultLeavePolicyId', 'policyName status')
       .lean();
+
+    if (department) {
+      (department as any).defaultAttendancePolicyId = department.departmentAttendancePolicyId;
+    }
 
     return department;
   }
@@ -211,7 +255,8 @@ export class DepartmentService {
     )
       .populate('headOfDepartment', 'firstName lastName email')
       .populate('members', 'firstName lastName email employeeId')
-      .populate('departmentAttendancePolicyId', 'policyName status');
+      .populate('departmentAttendancePolicyId', 'policyName status')
+      .populate('defaultLeavePolicyId', 'policyName status');
 
     if (department && updates.departmentAttendancePolicyId !== undefined) {
       const memberIds = this.getMemberObjectIds(existing.members as unknown[]);
@@ -226,6 +271,48 @@ export class DepartmentService {
         previousPolicyId,
         newPolicyId
       );
+    }
+
+    // Update members' leave policy when department's default leave policy changes
+    if (department && updates.defaultLeavePolicyId !== undefined) {
+      const memberIds = this.getMemberObjectIds(existing.members as unknown[]);
+      const previousLeavePolicyId = existing.defaultLeavePolicyId ?? null;
+      const newLeavePolicyId =
+        updates.defaultLeavePolicyId === null
+          ? null
+          : policyFields.defaultLeavePolicyId ?? null;
+      
+      if (previousLeavePolicyId?.toString() !== newLeavePolicyId?.toString()) {
+        await this.updateMembersPolicyOnDepartmentChange(
+          existing.organizationId,
+          existing.name,
+          memberIds,
+          'leavePolicyId',
+          previousLeavePolicyId,
+          newLeavePolicyId
+        );
+      }
+    }
+
+    // Update members' payroll policy when department's default payroll policy changes
+    if (department && updates.defaultPayrollPolicyId !== undefined) {
+      const memberIds = this.getMemberObjectIds(existing.members as unknown[]);
+      const previousPayrollPolicyId = existing.defaultPayrollPolicyId ?? null;
+      const newPayrollPolicyId =
+        updates.defaultPayrollPolicyId === null
+          ? null
+          : policyFields.defaultPayrollPolicyId ?? null;
+      
+      if (previousPayrollPolicyId?.toString() !== newPayrollPolicyId?.toString()) {
+        await this.updateMembersPolicyOnDepartmentChange(
+          existing.organizationId,
+          existing.name,
+          memberIds,
+          'payrollPolicyId',
+          previousPayrollPolicyId,
+          newPayrollPolicyId
+        );
+      }
     }
 
     return department;

@@ -12,6 +12,7 @@ export class DepartmentController {
         description,
         headOfDepartment,
         departmentAttendancePolicyId,
+        defaultAttendancePolicyId,
         defaultLeavePolicyId,
         defaultPayrollPolicyId,
       } = req.body;
@@ -40,7 +41,7 @@ export class DepartmentController {
         description,
         headOfDepartment,
         {
-          departmentAttendancePolicyId,
+          departmentAttendancePolicyId: departmentAttendancePolicyId !== undefined ? departmentAttendancePolicyId : defaultAttendancePolicyId,
           defaultLeavePolicyId,
           defaultPayrollPolicyId,
         }
@@ -141,6 +142,7 @@ export class DepartmentController {
         description,
         headOfDepartment,
         departmentAttendancePolicyId,
+        defaultAttendancePolicyId,
         defaultLeavePolicyId,
         defaultPayrollPolicyId,
       } = req.body;
@@ -151,7 +153,7 @@ export class DepartmentController {
           name,
           description,
           headOfDepartment,
-          departmentAttendancePolicyId,
+          departmentAttendancePolicyId: departmentAttendancePolicyId !== undefined ? departmentAttendancePolicyId : defaultAttendancePolicyId,
           defaultLeavePolicyId,
           defaultPayrollPolicyId,
         },
@@ -307,6 +309,7 @@ export class DepartmentController {
       const { id } = req.params;
       const {
         departmentAttendancePolicyId,
+        defaultAttendancePolicyId,
         defaultLeavePolicyId,
         defaultPayrollPolicyId,
       } = req.body;
@@ -315,7 +318,7 @@ export class DepartmentController {
         id,
         req.organizationId!,
         {
-          departmentAttendancePolicyId,
+          departmentAttendancePolicyId: departmentAttendancePolicyId !== undefined ? departmentAttendancePolicyId : defaultAttendancePolicyId,
           defaultLeavePolicyId,
           defaultPayrollPolicyId,
         }

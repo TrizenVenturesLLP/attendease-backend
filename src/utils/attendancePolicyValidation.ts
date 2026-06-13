@@ -19,7 +19,6 @@ export type ShiftTiming = {
   endTime: string;
   expectedHours: number;
   graceMinutes: number;
-  isNightShift?: boolean;
 };
 
 export type AttendancePolicyInput = {
@@ -44,10 +43,9 @@ export function normalizeWeekRules(weekRules: WeekRule[], shift: ShiftTiming): W
 
     const startTime = rule.startTime ?? shift.startTime;
     const endTime = rule.endTime ?? shift.endTime;
-    const isNight = shift.isNightShift ?? false;
     const expectedHours =
       rule.expectedHours ??
-      computeExpectedHoursFromTimes(startTime, endTime, isNight) ??
+      computeExpectedHoursFromTimes(startTime, endTime) ??
       (rule.dayType === PolicyDayType.HALF_DAY
         ? Math.round((shift.expectedHours / 2) * 100) / 100
         : shift.expectedHours);
@@ -92,14 +90,8 @@ export function validateWeekRules(weekRules: WeekRule[], shift: ShiftTiming): vo
       );
     }
 
-    const isNight = shift.isNightShift ?? false;
-    if (!isNight && parseTimeToMinutes(rule.endTime) <= parseTimeToMinutes(rule.startTime)) {
-      throw new BadRequestError(`${rule.day}: endTime must be after startTime`);
-    }
-    if (isNight && parseTimeToMinutes(rule.endTime) > parseTimeToMinutes(rule.startTime)) {
-      throw new BadRequestError(
-        `${rule.day}: custom night-shift timing requires endTime earlier than startTime`
-      );
+    if (parseTimeToMinutes(rule.endTime) === parseTimeToMinutes(rule.startTime)) {
+      throw new BadRequestError(`${rule.day}: endTime must differ from startTime`);
     }
   }
 
@@ -109,7 +101,7 @@ export function validateWeekRules(weekRules: WeekRule[], shift: ShiftTiming): vo
     }
   }
 
-  validateShiftTimes(shift.startTime, shift.endTime, shift.isNightShift ?? false);
+  validateShiftTimes(shift.startTime, shift.endTime);
 }
 
 export function resolveDayRule(
@@ -154,10 +146,9 @@ export function resolveDayRule(
 
   const startTime = rule.startTime ?? shift.startTime;
   const endTime = rule.endTime ?? shift.endTime;
-  const isNight = shift.isNightShift ?? false;
   const expectedHours =
     rule.expectedHours ??
-    computeExpectedHoursFromTimes(startTime, endTime, isNight) ??
+    computeExpectedHoursFromTimes(startTime, endTime) ??
     (rule.dayType === PolicyDayType.HALF_DAY
       ? Math.round((shift.expectedHours / 2) * 100) / 100
       : shift.expectedHours);
@@ -222,7 +213,6 @@ export function shiftToTiming(shift: IShift): ShiftTiming {
     endTime: shift.endTime,
     expectedHours: shift.expectedHours,
     graceMinutes: shift.graceMinutes,
-    isNightShift: shift.isNightShift,
   };
 }
 

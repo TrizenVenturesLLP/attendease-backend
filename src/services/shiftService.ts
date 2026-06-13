@@ -2,7 +2,7 @@ import mongoose from 'mongoose';
 import Shift, { IShift, ShiftStatus } from '../models/Shift';
 import AttendancePolicy from '../models/AttendancePolicy';
 import { BadRequestError, ConflictError } from '../utils/AppError';
-import { computeExpectedHoursFromTimes, validateShiftTimes } from '../utils/shiftTiming';
+import { computeExpectedHoursFromTimes, parseTimeToMinutes, validateShiftTimes } from '../utils/shiftTiming';
 
 export type ShiftInput = {
   shiftName: string;
@@ -17,11 +17,13 @@ export type ShiftInput = {
 
 export class ShiftService {
   private normalizeInput(input: ShiftInput): ShiftInput {
-    const isNightShift = input.isNightShift ?? false;
-    validateShiftTimes(input.startTime, input.endTime, isNightShift);
+    validateShiftTimes(input.startTime, input.endTime);
+    const startMin = parseTimeToMinutes(input.startTime);
+    const endMin = parseTimeToMinutes(input.endTime);
+    const isNightShift = endMin <= startMin;
     const expectedHours =
       input.expectedHours ??
-      computeExpectedHoursFromTimes(input.startTime, input.endTime, isNightShift) ??
+      computeExpectedHoursFromTimes(input.startTime, input.endTime) ??
       8;
 
     return {

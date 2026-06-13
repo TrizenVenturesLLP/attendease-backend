@@ -15,7 +15,7 @@ export type LeaveTypeInput = {
 
 export const DEFAULT_LEAVE_TYPES: LeaveTypeInput[] = [
   { name: 'Vacation', code: 'VAC', isPaid: true, allowHalfDay: true },
-  { name: 'Unpaid Leave', code: 'UPL', isPaid: false, allowHalfDay: true },
+  { name: 'Loss of Pay', code: 'UPL', isPaid: false, allowHalfDay: true },
   { name: 'Sick Leave', code: 'SL', isPaid: true, requiresDocument: true, allowHalfDay: true },
   { name: 'Casual Leave', code: 'CL', isPaid: true, allowHalfDay: true },
   { name: 'Earned Leave', code: 'EL', isPaid: true, allowHalfDay: false },

@@ -11,6 +11,7 @@ import User, { AuthProvider, IUser, UserRole } from '../models/User';
 import Organization from '../models/Organization';
 import Department from '../models/Department';
 import AttendancePolicy, { PolicyStatus } from '../models/AttendancePolicy';
+import LeavePolicy from '../models/LeavePolicy';
 import {
   BadRequestError,
   NotFoundError,
@@ -56,6 +57,30 @@ export interface UserFilters {
 }
 
 class UserService {
+
+  private async syncUserDepartment(
+    userId: mongoose.Types.ObjectId,
+    organizationId: mongoose.Types.ObjectId,
+    currentDepartmentName?: string,
+    isActive?: boolean
+  ): Promise<void> {
+    // 1. Remove this user from all departments in this organization
+    await Department.updateMany(
+      { organizationId },
+      { $pull: { members: userId } }
+    );
+
+    // 2. If the user is active and has a department, add them to that department
+    if (isActive !== false && currentDepartmentName && currentDepartmentName.trim()) {
+      await Department.updateOne(
+        {
+          organizationId,
+          name: { $regex: `^${currentDepartmentName.trim()}$`, $options: 'i' },
+        },
+        { $addToSet: { members: userId } }
+      );
+    }
+  }
 
   private async applyDepartmentPolicyDefaults(
     userData: CreateUserData
@@ -132,6 +157,17 @@ class UserService {
     existing.authProvider = AuthProvider.LOCAL;
 
     await existing.save();
+
+    // Sync department members
+    if (existing.organizationId) {
+      await this.syncUserDepartment(
+        existing._id as mongoose.Types.ObjectId,
+        existing.organizationId,
+        existing.department,
+        existing.isActive
+      );
+    }
+
     return existing;
   }
 
@@ -475,7 +511,84 @@ class UserService {
 
     await user.save();
 
+    // Sync department members
+    if (user.organizationId) {
+      await this.syncUserDepartment(
+        user._id as mongoose.Types.ObjectId,
+        user.organizationId,
+        user.department,
+        user.isActive
+      );
+    }
+
     return user;
+  }
+
+  private async resolveUserPolicies(
+    users: any[],
+    organizationId?: string
+  ): Promise<any[]> {
+    if (!users || users.length === 0) return users;
+
+    const orgOid = organizationId ? new mongoose.Types.ObjectId(organizationId) : null;
+
+    const [attPolicies, leavePolicies, depts] = await Promise.all([
+      AttendancePolicy.find(orgOid ? { organizationId: orgOid, status: PolicyStatus.ACTIVE } : { status: PolicyStatus.ACTIVE }).lean(),
+      LeavePolicy.find(orgOid ? { organizationId: orgOid, status: 'ACTIVE' } : { status: 'ACTIVE' }).lean(),
+      Department.find(orgOid ? { organizationId: orgOid } : {}).lean(),
+    ]);
+
+    return users.map((u) => {
+      const userObj = u.toJSON ? u.toJSON() : u;
+      const userOrgId = userObj.organizationId?.toString();
+      if (!userOrgId) return userObj;
+
+      const orgAttPolicies = attPolicies.filter(p => p.organizationId?.toString() === userOrgId);
+      const orgLeavePolicies = leavePolicies.filter(p => p.organizationId?.toString() === userOrgId);
+      const orgDepts = depts.filter(d => d.organizationId?.toString() === userOrgId);
+
+      const orgDefaultAtt = orgAttPolicies.find(p => p.isDefault) || orgAttPolicies[0] || null;
+      const orgDefaultLeave = orgLeavePolicies.find(p => p.isDefault) || orgLeavePolicies[0] || null;
+
+      // Resolve Attendance Policy
+      let resolvedAttPolicy = null;
+      if (userObj.attendancePolicyId) {
+        resolvedAttPolicy = orgAttPolicies.find(p => p._id.toString() === userObj.attendancePolicyId.toString()) || null;
+      }
+      if (!resolvedAttPolicy && userObj.department) {
+        const deptName = userObj.department.trim().toLowerCase();
+        const dept = orgDepts.find(d => d.name.trim().toLowerCase() === deptName);
+        const deptPolicyId = dept?.departmentAttendancePolicyId;
+        if (deptPolicyId) {
+          resolvedAttPolicy = orgAttPolicies.find(p => p._id.toString() === deptPolicyId.toString()) || null;
+        }
+      }
+      if (!resolvedAttPolicy) {
+        resolvedAttPolicy = orgDefaultAtt;
+      }
+
+      // Resolve Leave Policy
+      let resolvedLeavePolicy = null;
+      if (userObj.leavePolicyId) {
+        resolvedLeavePolicy = orgLeavePolicies.find(p => p._id.toString() === userObj.leavePolicyId.toString()) || null;
+      }
+      if (!resolvedLeavePolicy && userObj.department) {
+        const deptName = userObj.department.trim().toLowerCase();
+        const dept = orgDepts.find(d => d.name.trim().toLowerCase() === deptName);
+        const deptLeavePolicyId = dept?.defaultLeavePolicyId;
+        if (deptLeavePolicyId) {
+          resolvedLeavePolicy = orgLeavePolicies.find(p => p._id.toString() === deptLeavePolicyId.toString()) || null;
+        }
+      }
+      if (!resolvedLeavePolicy) {
+        resolvedLeavePolicy = orgDefaultLeave;
+      }
+
+      userObj.attendancePolicy = resolvedAttPolicy ? { _id: resolvedAttPolicy._id, policyName: resolvedAttPolicy.policyName } : null;
+      userObj.leavePolicy = resolvedLeavePolicy ? { _id: resolvedLeavePolicy._id, policyName: resolvedLeavePolicy.policyName } : null;
+
+      return userObj;
+    });
   }
 
   /**
@@ -562,7 +675,7 @@ class UserService {
       .populate('createdBy', 'firstName lastName email')
       .sort({ createdAt: -1 });
 
-    return users;
+    return this.resolveUserPolicies(users, organizationId);
   }
 
   /**
@@ -645,7 +758,8 @@ class UserService {
       }
     }
 
-    return user;
+    const resolved = await this.resolveUserPolicies([user], organizationId || user.organizationId?.toString());
+    return resolved[0];
   }
 
   /**
@@ -794,6 +908,16 @@ class UserService {
     const { attendancePolicyId, leavePolicyId, payrollPolicyId, joiningDate, ...rest } = updates;
     Object.assign(user, rest);
     await user.save();
+
+    // Sync department members
+    if (user.organizationId) {
+      await this.syncUserDepartment(
+        user._id as mongoose.Types.ObjectId,
+        user.organizationId,
+        user.department,
+        user.isActive
+      );
+    }
 
     return user;
   }

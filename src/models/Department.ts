@@ -51,8 +51,14 @@ const DepartmentSchema = new Schema<IDepartment>(
   },
   {
     timestamps: true,
+    toJSON: { virtuals: true },
+    toObject: { virtuals: true },
   }
 );
+
+DepartmentSchema.virtual('defaultAttendancePolicyId').get(function (this: IDepartment) {
+  return this.departmentAttendancePolicyId;
+});
 
 DepartmentSchema.index({ organizationId: 1, name: 1 }, { unique: true });
 DepartmentSchema.index({ organizationId: 1 });

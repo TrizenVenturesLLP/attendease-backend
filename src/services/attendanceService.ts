@@ -352,6 +352,7 @@ export class AttendanceService {
       userId?: string;
       attendancePolicyId?: string;
       dayType?: string;
+      shiftId?: string;
     },
     page: number = 1,
     limit: number = 50

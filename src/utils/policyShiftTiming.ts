@@ -20,7 +20,6 @@ export async function loadPolicyShiftTiming(
       endTime: shiftRef.endTime,
       expectedHours: shiftRef.expectedHours,
       graceMinutes: shiftRef.graceMinutes ?? 15,
-      isNightShift: shiftRef.isNightShift ?? false,
     };
   }
 
@@ -32,7 +31,6 @@ export async function loadPolicyShiftTiming(
       endTime: '18:00',
       expectedHours: 8,
       graceMinutes: 15,
-      isNightShift: false,
     };
   }
   return shiftToTiming(shift);
