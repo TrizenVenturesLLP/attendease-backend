@@ -13,6 +13,47 @@ function getRootDomain(): string | null {
   }
 }
 
+function stripPort(host: string): string {
+  return host.includes(':') ? host.split(':')[0] : host;
+}
+
+function parseHostFromUrl(value: string | undefined): string | null {
+  if (!value) return null;
+  try {
+    return new URL(value).hostname.toLowerCase();
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Resolve the browser tenant host for local dev and reverse-proxy setups.
+ * Priority: X-Tenant-Host → X-Forwarded-Host → Origin → Referer → req.hostname
+ */
+function resolveRequestHost(req: Request): string {
+  const tenantHost = req.headers['x-tenant-host'] as string | undefined;
+  if (tenantHost) {
+    return stripPort(tenantHost.toLowerCase());
+  }
+
+  const forwardedHost = (req.headers['x-forwarded-host'] as string | undefined)?.split(',')[0];
+  if (forwardedHost) {
+    return stripPort(forwardedHost.toLowerCase());
+  }
+
+  const originHost = parseHostFromUrl(req.headers.origin as string | undefined);
+  if (originHost) {
+    return originHost;
+  }
+
+  const refererHost = parseHostFromUrl(req.headers.referer as string | undefined);
+  if (refererHost) {
+    return refererHost;
+  }
+
+  return stripPort((req.hostname || '').toLowerCase());
+}
+
 /**
  * Subdomain / Tenant Resolution Middleware
  *
@@ -29,7 +70,7 @@ function getRootDomain(): string | null {
  * - abc.org.trizenhr.com, company1.org.trizenhr.com   -> tenant (slug = abc, company1)
  *
  * Notes:
- * - In development (localhost), all requests are treated as platform-level.
+ * - Local dev: tenant is resolved from Origin (e.g. acme.localhost:3000 → API on :5000).
  * - This middleware MUST run before auth / tenantContext so that downstream code
  *   can rely on req.isPlatform / req.organizationId.
  */
@@ -40,15 +81,7 @@ export async function subdomainContext(
 ): Promise<void> {
   try {
     const rootDomain = getRootDomain();
-
-    // Determine host: prefer X-Forwarded-Host (behind proxy) then req.hostname
-    const forwardedHost = (req.headers['x-forwarded-host'] as string | undefined)?.split(',')[0];
-    let host = (forwardedHost || req.hostname || '').toLowerCase();
-
-    // Strip port if present
-    if (host.includes(':')) {
-      host = host.split(':')[0];
-    }
+    const host = resolveRequestHost(req);
 
     // Default: treat as platform if we cannot determine host or rootDomain
     if (!host || !rootDomain) {
@@ -56,14 +89,8 @@ export async function subdomainContext(
       return next();
     }
 
-    // Local development: localhost / 127.0.0.1 -> platform
-    if (host === 'localhost' || host.startsWith('localhost.') || host === '127.0.0.1') {
-      req.isPlatform = true;
-      return next();
-    }
-
-    // If host exactly matches root domain or www.<root>, it's the platform
-    if (host === rootDomain || host === `www.${rootDomain}`) {
+    // Platform host (no tenant subdomain)
+    if (host === rootDomain || host === `www.${rootDomain}` || host === '127.0.0.1') {
       req.isPlatform = true;
       return next();
     }

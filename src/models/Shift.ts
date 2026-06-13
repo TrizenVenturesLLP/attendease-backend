@@ -13,7 +13,7 @@ export interface IShift extends Document {
   expectedHours: number;
   breakMinutes?: number;
   graceMinutes: number;
-  isNightShift: boolean;
+  isNightShift?: boolean;
   status: ShiftStatus;
   createdBy?: mongoose.Types.ObjectId;
   updatedBy?: mongoose.Types.ObjectId;
@@ -69,6 +69,7 @@ const ShiftSchema = new Schema<IShift>(
     isNightShift: {
       type: Boolean,
       default: false,
+      required: false,
     },
     status: {
       type: String,

@@ -92,7 +92,14 @@ const createApp = (): Application => {
       },
       credentials: true,
       methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-      allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept'],
+      allowedHeaders: [
+        'Content-Type',
+        'Authorization',
+        'X-Requested-With',
+        'Accept',
+        'X-Tenant-Host',
+        'X-Forwarded-Host',
+      ],
       exposedHeaders: ['Content-Range', 'X-Content-Range'],
       maxAge: 86400,
     })

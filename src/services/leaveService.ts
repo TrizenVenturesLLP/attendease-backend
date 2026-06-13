@@ -20,6 +20,7 @@ import {
   isLeaveAwaitingApproval,
   loadWorkflowForLeave,
   normalizeLeaveStatus,
+  resolveRefId,
 } from '../utils/leaveWorkflowUtils';
 import { leavePolicyService } from './leavePolicyService';
 
@@ -249,7 +250,7 @@ export class LeaveService {
       throw new Error(`Insufficient ${leaveType.name} balance`);
     }
 
-    const workflowId = policy.workflowId;
+    const workflowId = resolveRefId(policy.workflowId);
     if (!workflowId) {
       throw new Error('Leave policy has no approval workflow configured');
     }
@@ -322,8 +323,8 @@ export class LeaveService {
     const eligible: ILeave[] = [];
     for (const leave of leaves) {
       const workflow = await loadWorkflowForLeave(
-        leave.workflowId.toString(),
-        leave.organizationId.toString()
+        leave.workflowId,
+        leave.organizationId
       );
       if (!workflow) continue;
       const canAct = await canReviewerActOnLeaveStep(leave, reviewerId, reviewerRole, workflow);
@@ -501,10 +502,7 @@ export class LeaveService {
       throw new Error('Leave request is not awaiting approval');
     }
 
-    const workflow = await loadWorkflowForLeave(
-      leave.workflowId.toString(),
-      leave.organizationId.toString()
-    );
+    const workflow = await loadWorkflowForLeave(leave.workflowId, leave.organizationId);
     if (!workflow) throw new Error('Approval workflow not found');
 
     const canAct = await canReviewerActOnLeaveStep(leave, reviewerId, reviewerRole, workflow);
@@ -576,10 +574,7 @@ export class LeaveService {
       throw new Error('Leave request is not awaiting approval');
     }
 
-    const workflow = await loadWorkflowForLeave(
-      leave.workflowId.toString(),
-      leave.organizationId.toString()
-    );
+    const workflow = await loadWorkflowForLeave(leave.workflowId, leave.organizationId);
     if (!workflow) throw new Error('Approval workflow not found');
 
     const canAct = await canReviewerActOnLeaveStep(leave, reviewerId, reviewerRole, workflow);

@@ -1,3 +1,4 @@
+import mongoose from 'mongoose';
 import ApprovalWorkflow, {
   ApproverType,
   IApprovalWorkflow,
@@ -6,11 +7,28 @@ import ApprovalWorkflow, {
 import User, { UserRole } from '../models/User';
 import { ILeave, LeaveStatus } from '../models/Leave';
 
+/** Normalize ObjectId, populated doc, or string ref to an id string. */
+export function resolveRefId(value: unknown): string {
+  if (value == null) return '';
+  if (typeof value === 'string') return value;
+  if (value instanceof mongoose.Types.ObjectId) return value.toString();
+  if (typeof value === 'object') {
+    const obj = value as { _id?: unknown };
+    if (obj._id != null) return resolveRefId(obj._id);
+  }
+  const asString = String(value);
+  return asString === '[object Object]' ? '' : asString;
+}
+
 export async function loadWorkflowForLeave(
-  workflowId: string,
-  organizationId: string
+  workflowId: unknown,
+  organizationId: unknown
 ): Promise<IApprovalWorkflow | null> {
-  return ApprovalWorkflow.findOne({ _id: workflowId, organizationId }).lean() as Promise<IApprovalWorkflow | null>;
+  const workflowObjectId = resolveRefId(workflowId);
+  const orgObjectId = resolveRefId(organizationId);
+  if (!workflowObjectId || !orgObjectId) return null;
+
+  return ApprovalWorkflow.findOne({ _id: workflowObjectId, organizationId: orgObjectId }).lean() as Promise<IApprovalWorkflow | null>;
 }
 
 export function getCurrentWorkflowStep(
@@ -47,10 +65,14 @@ export async function canReviewerActOnLeaveStep(
   }
 
   if (step.approverType === ApproverType.SUPERVISOR) {
-    const employee = await User.findById(leave.userId).select('supervisorId organizationId').lean();
+    const employee = await User.findById(resolveRefId(leave.userId))
+      .select('supervisorId organizationId')
+      .lean();
     if (!employee) return false;
-    if (employee.organizationId?.toString() !== leave.organizationId.toString()) return false;
-    return employee.supervisorId?.toString() === reviewerId;
+    if (resolveRefId(employee.organizationId) !== resolveRefId(leave.organizationId)) {
+      return false;
+    }
+    return resolveRefId(employee.supervisorId) === reviewerId;
   }
 
   return true;
