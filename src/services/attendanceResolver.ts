@@ -2,8 +2,7 @@ import { startOfDay, endOfDay } from 'date-fns';
 import Attendance, { AttendanceStatus } from '../models/Attendance';
 import Leave, { LeaveStatus } from '../models/Leave';
 import User from '../models/User';
-import AttendancePolicy, { IAttendancePolicy, PolicyDayType } from '../models/AttendancePolicy';
-import { attendancePolicyService } from './attendancePolicyService';
+import { IAttendancePolicy, PolicyDayType } from '../models/AttendancePolicy';
 import { parseTimeOnDate } from '../utils/organizationSettings';
 import {
   dateToWeekDay,
@@ -11,6 +10,8 @@ import {
 } from '../utils/attendancePolicyValidation';
 import { getNonWorkingHolidayDateKeys, toDateKey } from '../utils/workingDays';
 import Holiday from '../models/Holiday';
+import { resolveUserAttendancePolicy } from '../utils/resolveUserAttendancePolicy';
+import { loadPolicyShiftTiming } from '../utils/policyShiftTiming';
 
 export enum ResolvedAttendanceStatus {
   NOT_JOINED = 'not_joined',
@@ -66,6 +67,7 @@ export type ResolvedAttendance = {
   attendanceStatus: ResolvedAttendanceStatus;
   policyId?: string;
   policyName?: string;
+  shiftId?: string;
   checkIn?: Date;
   checkOut?: Date;
   workingHours?: number;
@@ -79,6 +81,25 @@ function halfDayThreshold(expectedHours: number): number {
   return expectedHours / 2;
 }
 
+async function resolveDayRuleForUser(
+  policy: IAttendancePolicy | null,
+  date: Date
+) {
+  if (!policy) {
+    return {
+      dayType: PolicyDayType.FULL_DAY,
+      startTime: '09:00',
+      endTime: '18:00',
+      expectedHours: 8,
+      graceMinutes: 15,
+    };
+  }
+
+  const shift = await loadPolicyShiftTiming(policy);
+  const weekDay = dateToWeekDay(date);
+  return resolveDayRule(policy.weekRules, shift, weekDay);
+}
+
 export class AttendanceResolver {
   async resolve(employeeId: string, dateInput: Date): Promise<ResolvedAttendance> {
     const date = startOfDay(dateInput);
@@ -90,27 +111,8 @@ export class AttendanceResolver {
     const organizationId = user.organizationId.toString();
     const joinDate = getEffectiveJoinDate(user);
 
-    let policy: IAttendancePolicy | null = user.attendancePolicyId
-      ? await AttendancePolicy.findOne({
-          _id: user.attendancePolicyId,
-          organizationId,
-        }).lean()
-      : null;
-
-    if (!policy || policy.status !== 'ACTIVE') {
-      policy = await attendancePolicyService.getDefaultPolicy(organizationId);
-    }
-
-    const weekDay = dateToWeekDay(date);
-    const dayRule = policy
-      ? resolveDayRule(policy.weekRules, policy.defaultFullDayRule, weekDay)
-      : {
-          dayType: PolicyDayType.FULL_DAY,
-          startTime: '09:00',
-          endTime: '18:00',
-          expectedHours: 8,
-          graceMinutes: 15,
-        };
+    const policy = await resolveUserAttendancePolicy(user);
+    const dayRule = await resolveDayRuleForUser(policy, date);
 
     const holidayKeys = await getNonWorkingHolidayDateKeys(organizationId, date, date);
     const isHoliday = holidayKeys.has(toDateKey(date));
@@ -150,6 +152,7 @@ export class AttendanceResolver {
       attendanceStatus: ResolvedAttendanceStatus.ABSENT,
       policyId: policy?._id?.toString(),
       policyName: policy?.policyName,
+      shiftId: policy?.shiftId?.toString(),
       checkIn: record?.checkIn,
       checkOut: record?.checkOut,
       workingHours: record?.workingHours,
@@ -203,7 +206,6 @@ export class AttendanceResolver {
       };
     }
 
-    // FULL_DAY
     if (workedHours >= expected * 0.9 || (record.checkIn && record.checkOut && workedHours >= expected * 0.75)) {
       return {
         ...base,

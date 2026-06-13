@@ -1,14 +1,13 @@
 import mongoose from 'mongoose';
 import Attendance, { AttendanceStatus } from '../models/Attendance';
-import AttendancePolicy, { IAttendancePolicy } from '../models/AttendancePolicy';
 import AttendanceRegularization, {
   IAttendanceRegularization,
   RegularizationRequestType,
   RegularizationStatus,
 } from '../models/AttendanceRegularization';
-import User from '../models/User';
+import User, { UserRole } from '../models/User';
 import { startOfDay } from 'date-fns';
-import { attendancePolicyService } from './attendancePolicyService';
+import { resolveUserAttendancePolicy } from '../utils/resolveUserAttendancePolicy';
 import { parseTimeOnDate } from '../utils/organizationSettings';
 import { validateRegularizationPayload } from '../utils/attendanceRegularizationValidation';
 
@@ -35,24 +34,6 @@ export type RegularizationStats = {
   rejected: number;
 };
 
-async function getUserPolicy(user: {
-  organizationId: { toString(): string };
-  attendancePolicyId?: { toString(): string };
-}): Promise<IAttendancePolicy | null> {
-  const organizationId = user.organizationId.toString();
-  let policy: IAttendancePolicy | null = user.attendancePolicyId
-    ? await AttendancePolicy.findOne({
-        _id: user.attendancePolicyId,
-        organizationId,
-        status: 'ACTIVE',
-      }).lean()
-    : null;
-
-  if (!policy) {
-    policy = await attendancePolicyService.getDefaultPolicy(organizationId);
-  }
-  return policy;
-}
 
 export class AttendanceRegularizationService {
   private parseRequestedTime(date: Date, time?: string): Date | undefined {
@@ -70,7 +51,7 @@ export class AttendanceRegularizationService {
       throw new Error('User not found');
     }
 
-    const policy = await getUserPolicy(user);
+    const policy = await resolveUserAttendancePolicy(user);
     if (policy && policy.allowRegularization === false) {
       throw new Error('Attendance regularization is not allowed under your attendance policy');
     }
@@ -162,6 +143,46 @@ export class AttendanceRegularizationService {
     return stats;
   }
 
+  private async getHrUserIds(organizationId: string): Promise<mongoose.Types.ObjectId[]> {
+    const users = await User.find({ organizationId, role: UserRole.HR }).select('_id').lean();
+    return users.map(u => u._id as mongoose.Types.ObjectId);
+  }
+
+  /** HR reviewers must not see regularization requests submitted by other HR users. */
+  private async buildReviewQuery(
+    organizationId: string,
+    reviewerRole: string,
+    status: RegularizationStatus = RegularizationStatus.PENDING
+  ): Promise<Record<string, unknown>> {
+    const query: Record<string, unknown> = {
+      organizationId,
+      status,
+    };
+
+    if (reviewerRole === UserRole.HR) {
+      const hrUserIds = await this.getHrUserIds(organizationId);
+      if (hrUserIds.length > 0) {
+        query.userId = { $nin: hrUserIds };
+      }
+    }
+
+    return query;
+  }
+
+  private async assertReviewerCanActOnRequest(
+    request: IAttendanceRegularization,
+    reviewerRole: string
+  ): Promise<void> {
+    if (reviewerRole !== UserRole.HR) {
+      return;
+    }
+
+    const requester = await User.findById(request.userId).select('role').lean();
+    if (requester?.role === UserRole.HR) {
+      throw new Error('HR regularization requests must be reviewed by a company admin');
+    }
+  }
+
   async getMyRequests(
     userId: string,
     organizationId: string,
@@ -201,12 +222,10 @@ export class AttendanceRegularizationService {
     reviewerId: string,
     reviewerRole: string,
     page = 1,
-    limit = 50
+    limit = 50,
+    status: RegularizationStatus = RegularizationStatus.PENDING
   ): Promise<{ records: IAttendanceRegularization[]; pagination: object }> {
-    const query: Record<string, unknown> = {
-      organizationId,
-      status: RegularizationStatus.PENDING,
-    };
+    const query = await this.buildReviewQuery(organizationId, reviewerRole, status);
 
     // HR users cannot action their own regularization requests.
     // Exclude them from HR's pending queue so only Admin can see & act on them.
@@ -215,10 +234,16 @@ export class AttendanceRegularizationService {
     }
 
     const skip = (page - 1) * limit;
+    const sort: Record<string, 1 | -1> =
+      status === RegularizationStatus.PENDING
+        ? { date: -1, createdAt: -1 }
+        : { reviewedAt: -1, createdAt: -1 };
+
     const [records, total] = await Promise.all([
       AttendanceRegularization.find(query)
         .populate('userId', 'firstName lastName email employeeId department role')
-        .sort({ date: -1 })
+        .populate('reviewedBy', 'firstName lastName email')
+        .sort(sort)
         .skip(skip)
         .limit(limit)
         .lean(),
@@ -229,6 +254,23 @@ export class AttendanceRegularizationService {
       records: records as IAttendanceRegularization[],
       pagination: { total, page, limit, pages: Math.ceil(total / limit) },
     };
+  }
+
+  async getPendingForNotifications(
+    organizationId: string,
+    reviewerRole: string,
+    limit = 20
+  ): Promise<IAttendanceRegularization[]> {
+    const query = await this.buildReviewQuery(
+      organizationId,
+      reviewerRole,
+      RegularizationStatus.PENDING
+    );
+    return AttendanceRegularization.find(query)
+      .populate('userId', 'firstName lastName email')
+      .sort({ createdAt: -1 })
+      .limit(limit)
+      .lean() as Promise<IAttendanceRegularization[]>;
   }
 
   private async applyApprovedRequest(
@@ -284,6 +326,8 @@ export class AttendanceRegularizationService {
       throw new Error('You cannot approve your own regularization request');
     }
 
+    await this.assertReviewerCanActOnRequest(request, _reviewerRole);
+
     const date = startOfDay(request.date);
     if (overrides?.requestedCheckIn) {
       request.requestedCheckIn = this.parseRequestedTime(date, overrides.requestedCheckIn);
@@ -331,6 +375,8 @@ export class AttendanceRegularizationService {
     if (reviewerRole === 'hr' && request.userId.toString() === reviewerId) {
       throw new Error('You cannot reject your own regularization request');
     }
+
+    await this.assertReviewerCanActOnRequest(request, _reviewerRole);
 
     request.status = RegularizationStatus.REJECTED;
     request.reviewedBy = reviewerId as any;

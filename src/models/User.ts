@@ -46,11 +46,12 @@ export interface IUser extends Document {
   resetPasswordExpires?: Date;
   profilePicture?: string;
   profilePhotoKey?: string;
-  shiftId?: mongoose.Types.ObjectId;
   attendancePolicyId?: mongoose.Types.ObjectId;
   leavePolicyId?: mongoose.Types.ObjectId;
   payrollPolicyId?: mongoose.Types.ObjectId;
   joiningDate?: Date;
+  /** Demo access window end — set when a demo invitation is accepted. */
+  demoAccessExpiresAt?: Date;
   createdAt: Date;
   updatedAt: Date;
   fullName: string;
@@ -178,10 +179,6 @@ const UserSchema = new Schema<IUser>(
       type: String,
       trim: true,
     },
-    shiftId: {
-      type: Schema.Types.ObjectId,
-      sparse: true,
-    },
     attendancePolicyId: {
       type: Schema.Types.ObjectId,
       ref: 'AttendancePolicy',
@@ -189,6 +186,7 @@ const UserSchema = new Schema<IUser>(
     },
     leavePolicyId: {
       type: Schema.Types.ObjectId,
+      ref: 'LeavePolicy',
       sparse: true,
     },
     payrollPolicyId: {
@@ -196,6 +194,9 @@ const UserSchema = new Schema<IUser>(
       sparse: true,
     },
     joiningDate: {
+      type: Date,
+    },
+    demoAccessExpiresAt: {
       type: Date,
     },
   },

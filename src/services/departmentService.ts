@@ -5,31 +5,12 @@ import AttendancePolicy, { PolicyStatus } from '../models/AttendancePolicy';
 import { BadRequestError } from '../utils/AppError';
 
 type DepartmentPolicyFields = {
-  defaultShiftId?: string | null;
-  defaultAttendancePolicyId?: string | null;
+  departmentAttendancePolicyId?: string | null;
   defaultLeavePolicyId?: string | null;
   defaultPayrollPolicyId?: string | null;
 };
 
 export class DepartmentService {
-  private extractObjectId(ref: unknown): mongoose.Types.ObjectId | null {
-    if (!ref) return null;
-    if (ref instanceof mongoose.Types.ObjectId) return ref;
-    if (typeof ref === 'string' && mongoose.Types.ObjectId.isValid(ref)) {
-      return new mongoose.Types.ObjectId(ref);
-    }
-    if (typeof ref === 'object' && ref !== null && '_id' in ref) {
-      return this.extractObjectId((ref as { _id: unknown })._id);
-    }
-    return null;
-  }
-
-  private getMemberObjectIds(members: unknown[]): mongoose.Types.ObjectId[] {
-    return members
-      .map((member) => this.extractObjectId(member))
-      .filter((id): id is mongoose.Types.ObjectId => id !== null);
-  }
-
   private async validateAttendancePolicy(
     organizationId: string,
     policyId: string
@@ -50,19 +31,13 @@ export class DepartmentService {
   ): Promise<Record<string, mongoose.Types.ObjectId | null | undefined>> {
     const result: Record<string, mongoose.Types.ObjectId | null | undefined> = {};
 
-    if (policies.defaultAttendancePolicyId) {
-      await this.validateAttendancePolicy(organizationId, policies.defaultAttendancePolicyId);
-      result.defaultAttendancePolicyId = new mongoose.Types.ObjectId(
-        policies.defaultAttendancePolicyId
+    if (policies.departmentAttendancePolicyId) {
+      await this.validateAttendancePolicy(organizationId, policies.departmentAttendancePolicyId);
+      result.departmentAttendancePolicyId = new mongoose.Types.ObjectId(
+        policies.departmentAttendancePolicyId
       );
-    } else if (policies.defaultAttendancePolicyId === null) {
-      result.defaultAttendancePolicyId = null;
-    }
-
-    if (policies.defaultShiftId) {
-      result.defaultShiftId = new mongoose.Types.ObjectId(policies.defaultShiftId);
-    } else if (policies.defaultShiftId === null) {
-      result.defaultShiftId = null;
+    } else if (policies.departmentAttendancePolicyId === null) {
+      result.departmentAttendancePolicyId = null;
     }
 
     if (policies.defaultLeavePolicyId) {
@@ -80,57 +55,51 @@ export class DepartmentService {
     return result;
   }
 
-  private async syncAttendancePolicyToDepartmentUsers(
-    department: Pick<IDepartment, 'organizationId' | 'name'>,
+  private getMemberObjectIds(members: unknown[]): mongoose.Types.ObjectId[] {
+    return members
+      .map((member) => {
+        if (member instanceof mongoose.Types.ObjectId) return member;
+        if (typeof member === 'string' && mongoose.Types.ObjectId.isValid(member)) {
+          return new mongoose.Types.ObjectId(member);
+        }
+        if (typeof member === 'object' && member !== null && '_id' in member) {
+          const ref = (member as { _id: unknown })._id;
+          if (typeof ref === 'string' && mongoose.Types.ObjectId.isValid(ref)) {
+            return new mongoose.Types.ObjectId(ref);
+          }
+        }
+        return null;
+      })
+      .filter((id): id is mongoose.Types.ObjectId => id !== null);
+  }
+
+  private async clearStaleUserPolicyOnDepartmentChange(
+    organizationId: mongoose.Types.ObjectId,
+    departmentName: string,
     memberIds: mongoose.Types.ObjectId[],
     previousPolicyId?: mongoose.Types.ObjectId | null,
     newPolicyId?: mongoose.Types.ObjectId | null
   ): Promise<void> {
-    if (newPolicyId?.toString() === previousPolicyId?.toString()) {
-      return;
-    }
+    if (!previousPolicyId) return;
+    if (newPolicyId?.toString() === previousPolicyId.toString()) return;
 
-    const orgId = department.organizationId;
-    const deptNameRegex = new RegExp(`^${department.name.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i');
+    const deptNameRegex = new RegExp(
+      `^${departmentName.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`,
+      'i'
+    );
 
-    const userFilter: Record<string, unknown> = {
-      organizationId: orgId,
-      $or: [
-        { _id: { $in: memberIds } },
-        { department: deptNameRegex },
-      ],
-    };
-
-    if (previousPolicyId) {
-      userFilter.$and = [
-        {
-          $or: [
-            { attendancePolicyId: { $exists: false } },
-            { attendancePolicyId: null },
-            { attendancePolicyId: previousPolicyId },
-          ],
-        },
-      ];
-    }
-
-    const userUpdate =
-      newPolicyId == null
-        ? { $unset: { attendancePolicyId: '' } }
-        : { $set: { attendancePolicyId: newPolicyId } };
-
-    await User.updateMany(userFilter, userUpdate);
+    await User.updateMany(
+      {
+        organizationId,
+        attendancePolicyId: previousPolicyId,
+        $or: [{ _id: { $in: memberIds } }, { department: deptNameRegex }],
+      },
+      { $unset: { attendancePolicyId: '' } }
+    );
   }
 
-  private applyDepartmentDefaultsToUser(
-    department: IDepartment
-  ): Record<string, mongoose.Types.ObjectId> {
+  private applyDepartmentLeavePayrollDefaults(department: IDepartment): Record<string, mongoose.Types.ObjectId> {
     const update: Record<string, mongoose.Types.ObjectId> = {};
-    if (department.defaultShiftId) {
-      update.shiftId = department.defaultShiftId;
-    }
-    if (department.defaultAttendancePolicyId) {
-      update.attendancePolicyId = department.defaultAttendancePolicyId;
-    }
     if (department.defaultLeavePolicyId) {
       update.leavePolicyId = department.defaultLeavePolicyId;
     }
@@ -140,10 +109,6 @@ export class DepartmentService {
     return update;
   }
 
-  /**
-   * Create a new department
-   * organizationId isrequired for multi-tenant
-   */
   async createDepartment(
     organizationId: string,
     name: string,
@@ -165,12 +130,8 @@ export class DepartmentService {
     return department;
   }
 
-  /**
-   * Get all departments
-   * Filter by organizationId for tenant isolation
-   */
   async getAllDepartments(organizationId?: string): Promise<IDepartment[]> {
-    const query: any = {};
+    const query: Record<string, unknown> = {};
     if (organizationId) {
       query.organizationId = organizationId;
     }
@@ -178,19 +139,15 @@ export class DepartmentService {
     const departments = await Department.find(query)
       .populate('headOfDepartment', 'firstName lastName email')
       .populate('members', 'firstName lastName email employeeId')
-      .populate('defaultAttendancePolicyId', 'policyName status')
+      .populate('departmentAttendancePolicyId', 'policyName status')
       .sort({ name: 1 })
       .lean();
 
     return departments;
   }
 
-  /**
-   * Get department by ID
-   * organizationId for tenant verification
-   */
   async getDepartmentById(id: string, organizationId?: string): Promise<IDepartment | null> {
-    const query: any = { _id: id };
+    const query: Record<string, unknown> = { _id: id };
     if (organizationId) {
       query.organizationId = organizationId;
     }
@@ -198,23 +155,19 @@ export class DepartmentService {
     const department = await Department.findOne(query)
       .populate('headOfDepartment', 'firstName lastName email')
       .populate('members', 'firstName lastName email employeeId')
-      .populate('defaultAttendancePolicyId', 'policyName status')
+      .populate('departmentAttendancePolicyId', 'policyName status')
       .lean();
 
     return department;
   }
 
-  /**
-   * Update department
-   */
   async updateDepartment(
     id: string,
     updates: {
       name?: string;
       description?: string;
       headOfDepartment?: string;
-      defaultShiftId?: string | null;
-      defaultAttendancePolicyId?: string | null;
+      departmentAttendancePolicyId?: string | null;
       defaultLeavePolicyId?: string | null;
       defaultPayrollPolicyId?: string | null;
     },
@@ -242,15 +195,14 @@ export class DepartmentService {
       updateData.headOfDepartment = null;
     }
 
+    const previousPolicyId = existing.departmentAttendancePolicyId ?? null;
+
     const policyFields = await this.resolvePolicyFields(orgId, {
-      defaultShiftId: updates.defaultShiftId,
-      defaultAttendancePolicyId: updates.defaultAttendancePolicyId,
+      departmentAttendancePolicyId: updates.departmentAttendancePolicyId,
       defaultLeavePolicyId: updates.defaultLeavePolicyId,
       defaultPayrollPolicyId: updates.defaultPayrollPolicyId,
     });
     Object.assign(updateData, policyFields);
-
-    const previousAttendancePolicyId = existing.defaultAttendancePolicyId ?? null;
 
     const department = await Department.findOneAndUpdate(
       query,
@@ -259,15 +211,20 @@ export class DepartmentService {
     )
       .populate('headOfDepartment', 'firstName lastName email')
       .populate('members', 'firstName lastName email employeeId')
-      .populate('defaultAttendancePolicyId', 'policyName status');
+      .populate('departmentAttendancePolicyId', 'policyName status');
 
-    if (department && updates.defaultAttendancePolicyId !== undefined) {
+    if (department && updates.departmentAttendancePolicyId !== undefined) {
       const memberIds = this.getMemberObjectIds(existing.members as unknown[]);
-      await this.syncAttendancePolicyToDepartmentUsers(
-        department,
+      const newPolicyId =
+        updates.departmentAttendancePolicyId === null
+          ? null
+          : policyFields.departmentAttendancePolicyId ?? null;
+      await this.clearStaleUserPolicyOnDepartmentChange(
+        existing.organizationId,
+        existing.name,
         memberIds,
-        previousAttendancePolicyId,
-        department.defaultAttendancePolicyId ?? null
+        previousPolicyId,
+        newPolicyId
       );
     }
 
@@ -277,12 +234,7 @@ export class DepartmentService {
   async updateDefaultPolicies(
     deptId: string,
     organizationId: string,
-    policies: {
-      defaultShiftId?: string | null;
-      defaultAttendancePolicyId?: string | null;
-      defaultLeavePolicyId?: string | null;
-      defaultPayrollPolicyId?: string | null;
-    }
+    policies: DepartmentPolicyFields
   ): Promise<IDepartment | null> {
     return this.updateDepartment(deptId, policies, organizationId);
   }
@@ -297,11 +249,8 @@ export class DepartmentService {
     }).lean();
   }
 
-  /**
-   * Delete department
-   */
   async deleteDepartment(id: string, organizationId?: string): Promise<boolean> {
-    const query: any = { _id: id };
+    const query: Record<string, unknown> = { _id: id };
     if (organizationId) {
       query.organizationId = organizationId;
     }
@@ -310,11 +259,12 @@ export class DepartmentService {
     return !!result;
   }
 
-  /**
-   * Add member to department — also updates User.department field
-   */
-  async addMemberToDepartment(deptId: string, userId: string, organizationId?: string): Promise<IDepartment | null> {
-    const query: any = { _id: deptId };
+  async addMemberToDepartment(
+    deptId: string,
+    userId: string,
+    organizationId?: string
+  ): Promise<IDepartment | null> {
+    const query: Record<string, unknown> = { _id: deptId };
     if (organizationId) {
       query.organizationId = organizationId;
     }
@@ -329,26 +279,20 @@ export class DepartmentService {
 
     if (department) {
       const userUpdate: Record<string, unknown> = { department: department.name };
-      const deptDefaults = this.applyDepartmentDefaultsToUser(department);
-
-      if (deptDefaults.shiftId) userUpdate.shiftId = deptDefaults.shiftId;
-      if (deptDefaults.attendancePolicyId) {
-        userUpdate.attendancePolicyId = deptDefaults.attendancePolicyId;
-      }
-      if (deptDefaults.leavePolicyId) userUpdate.leavePolicyId = deptDefaults.leavePolicyId;
-      if (deptDefaults.payrollPolicyId) userUpdate.payrollPolicyId = deptDefaults.payrollPolicyId;
-
+      const deptDefaults = this.applyDepartmentLeavePayrollDefaults(department);
+      Object.assign(userUpdate, deptDefaults);
       await User.updateOne({ _id: userId }, { $set: userUpdate });
     }
 
     return department;
   }
 
-  /**
-   * Remove member from department — also clears User.department field
-   */
-  async removeMemberFromDepartment(deptId: string, userId: string, organizationId?: string): Promise<IDepartment | null> {
-    const query: any = { _id: deptId };
+  async removeMemberFromDepartment(
+    deptId: string,
+    userId: string,
+    organizationId?: string
+  ): Promise<IDepartment | null> {
+    const query: Record<string, unknown> = { _id: deptId };
     if (organizationId) {
       query.organizationId = organizationId;
     }
@@ -362,35 +306,27 @@ export class DepartmentService {
       .populate('members', 'firstName lastName email employeeId');
 
     if (department) {
-      // Clear User.department — check if user is in another dept first
       const otherDept = await Department.findOne({
         _id: { $ne: deptId },
         members: new mongoose.Types.ObjectId(userId),
         ...(organizationId ? { organizationId } : {}),
       });
       if (!otherDept) {
-        // Not in any other department — clear the field
-        await User.updateOne(
-          { _id: userId },
-          { $unset: { department: '' } }
-        );
+        await User.updateOne({ _id: userId }, { $unset: { department: '' } });
       } else {
-        // Update to the other department's name
-        await User.updateOne(
-          { _id: userId },
-          { $set: { department: otherDept.name } }
-        );
+        await User.updateOne({ _id: userId }, { $set: { department: otherDept.name } });
       }
     }
 
     return department;
   }
 
-  /**
-   * Set department head
-   */
-  async setDepartmentHead(deptId: string, userId: string | null, organizationId?: string): Promise<IDepartment | null> {
-    const query: any = { _id: deptId };
+  async setDepartmentHead(
+    deptId: string,
+    userId: string | null,
+    organizationId?: string
+  ): Promise<IDepartment | null> {
+    const query: Record<string, unknown> = { _id: deptId };
     if (organizationId) {
       query.organizationId = organizationId;
     }

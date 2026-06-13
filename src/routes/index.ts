@@ -11,6 +11,11 @@ import healthRoutes from './health.routes';
 import payrollRoutes from './payroll.routes';
 import notificationRoutes from './notification.routes';
 import attendancePolicyRoutes from './attendancePolicy.routes';
+import shiftRoutes from './shift.routes';
+import leaveTypeRoutes from './leaveType.routes';
+import leavePolicyRoutes from './leavePolicy.routes';
+import approvalWorkflowRoutes from './approvalWorkflow.routes';
+import platformRoutes from './platform.routes';
 
 const router = Router();
 
@@ -28,5 +33,10 @@ router.use('/dashboard', dashboardRoutes);
 router.use('/payroll', payrollRoutes);
 router.use('/notifications', notificationRoutes);
 router.use('/attendance-policies', attendancePolicyRoutes);
+router.use('/shifts', shiftRoutes);
+router.use('/leave-types', leaveTypeRoutes);
+router.use('/leave-policies', leavePolicyRoutes);
+router.use('/approval-workflows', approvalWorkflowRoutes);
+router.use('/platform', platformRoutes);
 
 export default router;

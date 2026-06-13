@@ -2,7 +2,6 @@ import mongoose from 'mongoose';
 import AttendancePolicy, {
   IAttendancePolicy,
   PolicyStatus,
-  WeekRule,
 } from '../models/AttendancePolicy';
 import User from '../models/User';
 import Department from '../models/Department';
@@ -11,6 +10,7 @@ import {
   AttendancePolicyInput,
   buildDefaultWeekRules,
   normalizeWeekRules,
+  shiftToTiming,
   validateWeekRules,
 } from '../utils/attendancePolicyValidation';
 import {
@@ -18,64 +18,61 @@ import {
   ConflictError,
   NotFoundError,
 } from '../utils/AppError';
-import {
-  getOrganizationWorkingHours,
-} from '../utils/organizationSettings';
 import { getOrganizationWeeklyOffPattern } from '../utils/workingDays';
-import { PolicyDayType, WeekDay } from '../models/AttendancePolicy';
+import { PolicyDayType, WeekDay, WeekRule } from '../models/AttendancePolicy';
+import { shiftService } from './shiftService';
 
-function weeklyOffPatternToWeekRules(
-  pattern: WeeklyOffPattern,
-  defaultFullDayRule: AttendancePolicyInput['defaultFullDayRule']
-): WeekRule[] {
+function weeklyOffPatternToWeekRules(pattern: WeeklyOffPattern): WeekRule[] {
   const base = buildDefaultWeekRules();
 
   return base.map((rule) => {
     if (rule.day === WeekDay.SUN) {
-      return { ...rule, dayType: PolicyDayType.WEEKLY_OFF, useDefaultTiming: false };
+      return { ...rule, dayType: PolicyDayType.WEEKLY_OFF, useShiftTiming: false };
     }
 
     if (pattern === WeeklyOffPattern.MON_SAT) {
-      return { ...rule, dayType: PolicyDayType.FULL_DAY, useDefaultTiming: true };
+      return { ...rule, dayType: PolicyDayType.FULL_DAY, useShiftTiming: true };
     }
 
     if (pattern === WeeklyOffPattern.SECOND_FOURTH_SAT) {
       if (rule.day === WeekDay.SAT) {
-        const halfEndMins =
-          parseInt(defaultFullDayRule.startTime.split(':')[0], 10) * 60 +
-          parseInt(defaultFullDayRule.startTime.split(':')[1], 10) +
-          Math.round((defaultFullDayRule.expectedHours / 2) * 60);
-        const halfEnd = `${String(Math.floor(halfEndMins / 60)).padStart(2, '0')}:${String(halfEndMins % 60).padStart(2, '0')}`;
-
         return {
           day: WeekDay.SAT,
           dayType: PolicyDayType.HALF_DAY,
-          useDefaultTiming: false,
-          startTime: defaultFullDayRule.startTime,
-          endTime: halfEnd,
-          expectedHours: defaultFullDayRule.expectedHours / 2,
-          graceMinutes: defaultFullDayRule.graceMinutes,
+          useShiftTiming: false,
+          startTime: '09:00',
+          endTime: '13:00',
+          expectedHours: 4,
+          graceMinutes: 10,
         };
       }
-      return { ...rule, dayType: PolicyDayType.FULL_DAY, useDefaultTiming: true };
+      return { ...rule, dayType: PolicyDayType.FULL_DAY, useShiftTiming: true };
     }
 
-    // mon_fri default: Sat/Sun off
     if (rule.day === WeekDay.SAT) {
-      return { ...rule, dayType: PolicyDayType.WEEKLY_OFF, useDefaultTiming: false };
+      return { ...rule, dayType: PolicyDayType.WEEKLY_OFF, useShiftTiming: false };
     }
-    return { ...rule, dayType: PolicyDayType.FULL_DAY, useDefaultTiming: true };
+    return { ...rule, dayType: PolicyDayType.FULL_DAY, useShiftTiming: true };
   });
 }
 
 export class AttendancePolicyService {
+  private async loadShiftForPolicy(shiftId: string, organizationId: string) {
+    const shift = await shiftService.getShiftById(shiftId, organizationId);
+    if (!shift || shift.status !== 'ACTIVE') {
+      throw new BadRequestError('Active shift not found in this organization');
+    }
+    return shiftToTiming(shift);
+  }
+
   async createPolicy(
     organizationId: string,
     input: AttendancePolicyInput,
     createdBy: string
   ): Promise<IAttendancePolicy> {
-    const normalizedWeekRules = normalizeWeekRules(input.weekRules, input.defaultFullDayRule);
-    validateWeekRules(normalizedWeekRules, input.defaultFullDayRule);
+    const shift = await this.loadShiftForPolicy(input.shiftId, organizationId);
+    const normalizedWeekRules = normalizeWeekRules(input.weekRules, shift);
+    validateWeekRules(normalizedWeekRules, shift);
 
     const existing = await AttendancePolicy.findOne({
       organizationId,
@@ -99,7 +96,7 @@ export class AttendancePolicyService {
     const policy = await AttendancePolicy.create({
       organizationId,
       policyName: input.policyName.trim(),
-      defaultFullDayRule: input.defaultFullDayRule,
+      shiftId: input.shiftId,
       weekRules: normalizedWeekRules,
       autoAbsentEnabled: input.autoAbsentEnabled ?? true,
       allowRegularization: input.allowRegularization ?? true,
@@ -115,11 +112,16 @@ export class AttendancePolicyService {
   async getAllPolicies(organizationId: string, status?: PolicyStatus): Promise<IAttendancePolicy[]> {
     const query: Record<string, unknown> = { organizationId };
     if (status) query.status = status;
-    return AttendancePolicy.find(query).sort({ isDefault: -1, policyName: 1 }).lean();
+    return AttendancePolicy.find(query)
+      .populate('shiftId', 'shiftName startTime endTime expectedHours graceMinutes isNightShift status')
+      .sort({ isDefault: -1, policyName: 1 })
+      .lean() as Promise<IAttendancePolicy[]>;
   }
 
   async getPolicyById(id: string, organizationId: string): Promise<IAttendancePolicy | null> {
-    return AttendancePolicy.findOne({ _id: id, organizationId }).lean();
+    return AttendancePolicy.findOne({ _id: id, organizationId })
+      .populate('shiftId', 'shiftName startTime endTime expectedHours graceMinutes breakMinutes isNightShift status')
+      .lean() as Promise<IAttendancePolicy | null>;
   }
 
   async updatePolicy(
@@ -143,12 +145,17 @@ export class AttendancePolicyService {
       policy.policyName = input.policyName.trim();
     }
 
-    const defaultFullDayRule = input.defaultFullDayRule ?? policy.defaultFullDayRule;
-    const rawWeekRules = input.weekRules ?? policy.weekRules;
-    if (input.defaultFullDayRule || input.weekRules) {
-      const weekRules = normalizeWeekRules(rawWeekRules, defaultFullDayRule);
-      validateWeekRules(weekRules, defaultFullDayRule);
-      policy.defaultFullDayRule = defaultFullDayRule;
+    const shiftId = input.shiftId ?? policy.shiftId.toString();
+    const shift = await this.loadShiftForPolicy(shiftId, organizationId);
+
+    if (input.shiftId) {
+      policy.shiftId = new mongoose.Types.ObjectId(input.shiftId);
+    }
+
+    if (input.weekRules || input.shiftId) {
+      const rawWeekRules = input.weekRules ?? policy.weekRules;
+      const weekRules = normalizeWeekRules(rawWeekRules, shift);
+      validateWeekRules(weekRules, shift);
       policy.weekRules = weekRules;
       policy.markModified('weekRules');
     }
@@ -156,6 +163,22 @@ export class AttendancePolicyService {
     if (input.autoAbsentEnabled !== undefined) policy.autoAbsentEnabled = input.autoAbsentEnabled;
     if (input.allowRegularization !== undefined) policy.allowRegularization = input.allowRegularization;
     if (input.status !== undefined) policy.status = input.status;
+
+    if (input.isDefault === true) {
+      if (policy.status !== PolicyStatus.ACTIVE) {
+        throw new BadRequestError('Only active policies can be set as default');
+      }
+      await AttendancePolicy.updateMany(
+        { organizationId, isDefault: true, _id: { $ne: id } },
+        { $set: { isDefault: false } }
+      );
+      policy.isDefault = true;
+    } else if (input.isDefault === false && policy.isDefault) {
+      throw new BadRequestError(
+        'Cannot unset the default policy. Set another policy as default first.'
+      );
+    }
+
     policy.updatedBy = new mongoose.Types.ObjectId(updatedBy);
     await policy.save();
     return policy;
@@ -175,14 +198,23 @@ export class AttendancePolicyService {
     }
 
     if (status === PolicyStatus.INACTIVE) {
-      const inUse =
-        (await User.exists({ organizationId, attendancePolicyId: id })) ||
-        (await Department.exists({ organizationId, defaultAttendancePolicyId: id }));
-      if (inUse) {
-        throw new BadRequestError(
-          'Cannot deactivate policy assigned to employees or departments. Reassign first.'
-        );
-      }
+      const policyOid = new mongoose.Types.ObjectId(id);
+      const orgOid = new mongoose.Types.ObjectId(organizationId);
+
+      await Department.updateMany(
+        {
+          organizationId: orgOid,
+          $or: [
+            { departmentAttendancePolicyId: policyOid },
+            { defaultAttendancePolicyId: policyOid },
+          ],
+        },
+        { $unset: { departmentAttendancePolicyId: '', defaultAttendancePolicyId: '' } }
+      );
+      await User.updateMany(
+        { organizationId: orgOid, attendancePolicyId: policyOid },
+        { $unset: { attendancePolicyId: '' } }
+      );
     }
 
     policy.status = status;
@@ -215,52 +247,76 @@ export class AttendancePolicyService {
       organizationId,
       isDefault: true,
       status: PolicyStatus.ACTIVE,
-    }).lean();
+    })
+      .populate('shiftId')
+      .lean();
 
     if (!policy) {
       policy = await AttendancePolicy.findOne({
         organizationId,
         status: PolicyStatus.ACTIVE,
       })
+        .populate('shiftId')
         .sort({ createdAt: 1 })
         .lean();
     }
 
-    return policy;
+    return policy as IAttendancePolicy | null;
   }
 
   async ensureDefaultPolicyForOrg(organizationId: string, createdBy?: string): Promise<IAttendancePolicy> {
     const existing = await this.getDefaultPolicy(organizationId);
     if (existing) return existing as IAttendancePolicy;
 
-    const workingHours = await getOrganizationWorkingHours(organizationId);
+    const defaultShift = await shiftService.ensureDefaultShift(organizationId, createdBy);
     const pattern = await getOrganizationWeeklyOffPattern(organizationId);
-
-    const startMins =
-      parseInt(workingHours.startTime.split(':')[0], 10) * 60 +
-      parseInt(workingHours.startTime.split(':')[1], 10);
-    const endMins =
-      parseInt(workingHours.endTime.split(':')[0], 10) * 60 +
-      parseInt(workingHours.endTime.split(':')[1], 10);
-    const expectedHours = Math.round(((endMins - startMins) / 60) * 10) / 10;
-
-    const defaultFullDayRule = {
-      startTime: workingHours.startTime,
-      endTime: workingHours.endTime,
-      expectedHours: expectedHours > 0 ? expectedHours : 8,
-      graceMinutes: 15,
-    };
 
     return this.createPolicy(
       organizationId,
       {
         policyName: 'General Staff Policy',
-        defaultFullDayRule,
-        weekRules: weeklyOffPatternToWeekRules(pattern, defaultFullDayRule),
+        shiftId: defaultShift._id.toString(),
+        weekRules: weeklyOffPatternToWeekRules(pattern),
         isDefault: true,
       },
       createdBy ?? new mongoose.Types.ObjectId().toString()
     );
+  }
+
+  async deletePolicy(id: string, organizationId: string): Promise<void> {
+    const policy = await AttendancePolicy.findOne({ _id: id, organizationId });
+    if (!policy) {
+      throw new NotFoundError('Policy not found');
+    }
+
+    if (policy.isDefault) {
+      throw new BadRequestError(
+        'Cannot delete the default attendance policy. Set another policy as default first.'
+      );
+    }
+
+    const policyOid = new mongoose.Types.ObjectId(id);
+    const orgOid = new mongoose.Types.ObjectId(organizationId);
+
+    // Unassign from departments so members fall back to the organization default at runtime.
+    await Department.updateMany(
+      {
+        organizationId: orgOid,
+        $or: [
+          { departmentAttendancePolicyId: policyOid },
+          { defaultAttendancePolicyId: policyOid },
+        ],
+      },
+      { $unset: { departmentAttendancePolicyId: '', defaultAttendancePolicyId: '' } }
+    );
+
+    // Clear explicit user assignments so runtime resolution falls back to department/org default.
+    await User.updateMany(
+      { organizationId: orgOid, attendancePolicyId: policyOid },
+      { $unset: { attendancePolicyId: '' } }
+    );
+
+    await AttendancePolicy.findOneAndDelete({ _id: policyOid, organizationId: orgOid });
   }
 
   async assignToUser(
@@ -290,6 +346,7 @@ export const attendancePolicyService = new AttendancePolicyService();
 export async function seedDefaultPoliciesForAllOrgs(): Promise<void> {
   const orgs = await Organization.find({}).select('_id').lean();
   for (const org of orgs) {
+    await shiftService.ensureDefaultShift(org._id.toString());
     await attendancePolicyService.ensureDefaultPolicyForOrg(org._id.toString());
   }
 }

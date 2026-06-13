@@ -1,8 +1,8 @@
 import { Request, Response } from 'express';
 import { leaveService } from '../services/leaveService';
-import { LeaveType, LeaveStatus } from '../models/Leave';
 import { resolveOrganizationId } from '../utils/resolveOrganizationId';
 import { ForbiddenError } from '../utils/AppError';
+import { normalizeLeaveStatus } from '../utils/leaveWorkflowUtils';
 
 export class LeaveController {
   private async getOrganizationId(req: Request): Promise<string> {
@@ -28,17 +28,21 @@ export class LeaveController {
     });
   }
 
-  /**
-   * Request new leave
-   */
   async requestLeave(req: Request, res: Response): Promise<void> {
     try {
       const userId = req.user!.userId;
       const organizationId = await this.getOrganizationId(req);
-      const { leaveType, startDate, endDate, reason } = req.body;
+      const {
+        leaveTypeId,
+        startDate,
+        endDate,
+        reason,
+        isHalfDay,
+        attachmentUrl,
+        otherLeaveTypeName,
+      } = req.body;
 
-      // Validation
-      if (!leaveType || !startDate || !endDate || !reason) {
+      if (!leaveTypeId || !startDate || !endDate || !reason) {
         res.status(400).json({
           success: false,
           error: 'Leave type, start date, end date, and reason are required',
@@ -50,10 +54,11 @@ export class LeaveController {
       const leave = await leaveService.requestLeave(
         userId,
         organizationId,
-        leaveType as LeaveType,
+        leaveTypeId,
         new Date(startDate),
         new Date(endDate),
-        reason
+        reason,
+        { isHalfDay, attachmentUrl, otherLeaveTypeName }
       );
 
       res.status(201).json({
@@ -71,9 +76,6 @@ export class LeaveController {
     }
   }
 
-  /**
-   * Get current user's leaves
-   */
   async getMyLeaves(req: Request, res: Response): Promise<void> {
     try {
       const userId = req.user!.userId;
@@ -81,7 +83,7 @@ export class LeaveController {
       const { status, startDate, endDate, page, limit } = req.query;
 
       const filters: any = {};
-      if (status) filters.status = status as LeaveStatus;
+      if (status) filters.status = status as string;
       if (startDate) filters.startDate = new Date(startDate as string);
       if (endDate) filters.endDate = new Date(endDate as string);
 
@@ -108,9 +110,6 @@ export class LeaveController {
     }
   }
 
-  /**
-   * Get current user's leave balance
-   */
   async getMyBalance(req: Request, res: Response): Promise<void> {
     try {
       const userId = req.user!.userId;
@@ -133,9 +132,6 @@ export class LeaveController {
     }
   }
 
-  /**
-   * Get pending leaves (Supervisor/HR/Admin)
-   */
   async getPendingLeaves(req: Request, res: Response): Promise<void> {
     try {
       const userId = req.user!.userId;
@@ -166,17 +162,14 @@ export class LeaveController {
     }
   }
 
-  /**
-   * Get all leaves with filters (HR/Admin)
-   */
   async getAllLeaves(req: Request, res: Response): Promise<void> {
     try {
-      const { userId, status, leaveType, startDate, endDate, page, limit } = req.query;
+      const { userId, status, leaveTypeId, startDate, endDate, page, limit } = req.query;
 
       const filters: any = {};
       if (userId) filters.userId = userId as string;
-      if (status) filters.status = status as LeaveStatus;
-      if (leaveType) filters.leaveType = leaveType as LeaveType;
+      if (status) filters.status = status as string;
+      if (leaveTypeId) filters.leaveTypeId = leaveTypeId as string;
       if (startDate) filters.startDate = new Date(startDate as string);
       if (endDate) filters.endDate = new Date(endDate as string);
 
@@ -204,19 +197,16 @@ export class LeaveController {
     }
   }
 
-  /**
-   * Get team leaves (Supervisor sees only their team; HR/Admin see all)
-   */
   async getTeamLeaves(req: Request, res: Response): Promise<void> {
     try {
       const requesterUserId = req.user!.userId;
       const requesterRole = req.user!.role;
-      const { userId, status, leaveType, startDate, endDate, page, limit } = req.query;
+      const { userId, status, leaveTypeId, startDate, endDate, page, limit } = req.query;
 
       const filters: any = {};
       if (userId) filters.userId = userId as string;
-      if (status) filters.status = status as LeaveStatus;
-      if (leaveType) filters.leaveType = leaveType as LeaveType;
+      if (status) filters.status = status as string;
+      if (leaveTypeId) filters.leaveTypeId = leaveTypeId as string;
       if (startDate) filters.startDate = new Date(startDate as string);
       if (endDate) filters.endDate = new Date(endDate as string);
 
@@ -246,9 +236,6 @@ export class LeaveController {
     }
   }
 
-  /**
-   * Get leaves for calendar view
-   */
   async getCalendarLeaves(req: Request, res: Response): Promise<void> {
     try {
       const userId = req.user!.userId;
@@ -299,9 +286,19 @@ export class LeaveController {
     }
   }
 
-  /**
-   * Approve leave
-   */
+  async getLeaveApprovals(req: Request, res: Response): Promise<void> {
+    try {
+      const approvals = await leaveService.getLeaveApprovals(req.params.id);
+      res.status(200).json({ success: true, data: approvals, timestamp: new Date().toISOString() });
+    } catch (error: any) {
+      res.status(500).json({
+        success: false,
+        error: error.message || 'Failed to get leave approvals',
+        timestamp: new Date().toISOString(),
+      });
+    }
+  }
+
   async approveLeave(req: Request, res: Response): Promise<void> {
     try {
       const { id } = req.params;
@@ -313,7 +310,9 @@ export class LeaveController {
 
       res.status(200).json({
         success: true,
-        message: 'Leave approved successfully',
+        message: normalizeLeaveStatus(leave.status) === 'APPROVED'
+          ? 'Leave approved successfully'
+          : 'Leave advanced to next approval step',
         data: leave,
         timestamp: new Date().toISOString(),
       });
@@ -326,9 +325,6 @@ export class LeaveController {
     }
   }
 
-  /**
-   * Reject leave
-   */
   async rejectLeave(req: Request, res: Response): Promise<void> {
     try {
       const { id } = req.params;
@@ -362,9 +358,6 @@ export class LeaveController {
     }
   }
 
-  /**
-   * Cancel leave (by employee)
-   */
   async cancelLeave(req: Request, res: Response): Promise<void> {
     try {
       const { id } = req.params;
@@ -384,6 +377,37 @@ export class LeaveController {
         error: error.message || 'Failed to cancel leave',
         timestamp: new Date().toISOString(),
       });
+    }
+  }
+
+  async adjustBalance(req: Request, res: Response): Promise<void> {
+    try {
+      const organizationId = await this.getOrganizationId(req);
+      const { employeeId, year, leaveTypeId, allocated } = req.body;
+
+      if (!employeeId || !year || !leaveTypeId || allocated === undefined) {
+        res.status(400).json({
+          success: false,
+          error: 'employeeId, year, leaveTypeId, and allocated are required',
+        });
+        return;
+      }
+
+      const balance = await leaveService.adjustBalance(
+        organizationId,
+        employeeId,
+        Number(year),
+        leaveTypeId,
+        Number(allocated)
+      );
+
+      res.status(200).json({
+        success: true,
+        message: 'Leave balance updated',
+        data: balance,
+      });
+    } catch (error: any) {
+      res.status(400).json({ success: false, error: error.message || 'Failed to adjust balance' });
     }
   }
 }

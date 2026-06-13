@@ -1,31 +1,28 @@
 import mongoose, { Document, Schema } from 'mongoose';
 
-export enum LeaveType {
-  SICK = 'sick',
-  CASUAL = 'casual',
-  VACATION = 'vacation',
-  UNPAID = 'unpaid',
-}
-
 export enum LeaveStatus {
-  PENDING = 'pending',
-  APPROVED = 'approved',
-  REJECTED = 'rejected',
-  CANCELLED = 'cancelled',
+  PENDING = 'PENDING',
+  PARTIALLY_APPROVED = 'PARTIALLY_APPROVED',
+  APPROVED = 'APPROVED',
+  REJECTED = 'REJECTED',
+  CANCELLED = 'CANCELLED',
 }
 
 export interface ILeave extends Document {
   organizationId: mongoose.Types.ObjectId;
   userId: mongoose.Types.ObjectId;
-  leaveType: LeaveType;
+  leaveTypeId: mongoose.Types.ObjectId;
+  leavePolicyId?: mongoose.Types.ObjectId;
+  otherLeaveTypeName?: string;
   startDate: Date;
   endDate: Date;
   totalDays: number;
+  isHalfDay: boolean;
   reason: string;
+  attachmentUrl?: string;
+  workflowId: mongoose.Types.ObjectId;
+  currentApprovalStep: number;
   status: LeaveStatus;
-  reviewedBy?: mongoose.Types.ObjectId;
-  reviewedAt?: Date;
-  reviewNotes?: string;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -35,39 +32,69 @@ const LeaveSchema = new Schema<ILeave>(
     organizationId: {
       type: Schema.Types.ObjectId,
       ref: 'Organization',
-      required: [true, 'Organization ID is required'],
+      required: true,
       index: true,
     },
     userId: {
       type: Schema.Types.ObjectId,
       ref: 'User',
-      required: [true, 'User ID is required'],
+      required: true,
       index: true,
     },
-    leaveType: {
+    leaveTypeId: {
+      type: Schema.Types.ObjectId,
+      ref: 'LeaveType',
+      required: true,
+      index: true,
+    },
+    leavePolicyId: {
+      type: Schema.Types.ObjectId,
+      ref: 'LeavePolicy',
+    },
+    otherLeaveTypeName: {
       type: String,
-      enum: Object.values(LeaveType),
-      required: [true, 'Leave type is required'],
+      trim: true,
+      maxlength: 100,
     },
     startDate: {
       type: Date,
-      required: [true, 'Start date is required'],
+      required: true,
       index: true,
     },
     endDate: {
       type: Date,
-      required: [true, 'End date is required'],
+      required: true,
       index: true,
     },
     totalDays: {
       type: Number,
-      required: [true, 'Total days is required'],
-      min: 0.5, // Allow half-day leaves
+      required: true,
+      min: 0.5,
+    },
+    isHalfDay: {
+      type: Boolean,
+      default: false,
     },
     reason: {
       type: String,
-      required: [true, 'Reason is required'],
+      required: true,
       maxlength: 500,
+    },
+    attachmentUrl: {
+      type: String,
+      trim: true,
+      maxlength: 500,
+    },
+    workflowId: {
+      type: Schema.Types.ObjectId,
+      ref: 'ApprovalWorkflow',
+      required: true,
+    },
+    currentApprovalStep: {
+      type: Number,
+      required: true,
+      min: 1,
+      default: 1,
     },
     status: {
       type: String,
@@ -75,30 +102,14 @@ const LeaveSchema = new Schema<ILeave>(
       default: LeaveStatus.PENDING,
       index: true,
     },
-    reviewedBy: {
-      type: Schema.Types.ObjectId,
-      ref: 'User',
-    },
-    reviewedAt: {
-      type: Date,
-    },
-    reviewNotes: {
-      type: String,
-      maxlength: 500,
-    },
   },
-  {
-    timestamps: true,
-  }
+  { timestamps: true }
 );
 
-// Indexes for efficient queries
 LeaveSchema.index({ organizationId: 1, userId: 1, status: 1 });
 LeaveSchema.index({ organizationId: 1, userId: 1, startDate: 1, endDate: 1 });
-LeaveSchema.index({ organizationId: 1, status: 1, createdAt: -1 });
-LeaveSchema.index({ organizationId: 1, startDate: 1 });
+LeaveSchema.index({ organizationId: 1, status: 1, currentApprovalStep: 1, createdAt: -1 });
 
-// Validation: End date must be >= start date
 LeaveSchema.pre('validate', function () {
   if (this.endDate < this.startDate) {
     this.invalidate('endDate', 'End date must be greater than or equal to start date');

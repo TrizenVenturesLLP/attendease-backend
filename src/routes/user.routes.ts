@@ -116,12 +116,6 @@ router.patch(
 );
 
 router.patch(
-  '/:id/shift',
-  authorize(UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.HR),
-  userController.updateUserShift
-);
-
-router.patch(
   '/:id/attendance-policy',
   authorize(UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.HR),
   userController.updateUserAttendancePolicy

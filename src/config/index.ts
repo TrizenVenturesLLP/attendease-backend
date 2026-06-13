@@ -59,6 +59,10 @@ interface Config {
     frontendPort: string;
     frontendProtocol: string;
   };
+  demoInvitations: {
+    inviteLinkTtlHours: number;
+    demoAccessTtlDays: number;
+  };
   microsoft: MicrosoftConfig;
   minio: {
     rootUser: string;
@@ -131,6 +135,10 @@ const config: Config = {
       frontendProtocol,
     };
   })(),
+  demoInvitations: {
+    inviteLinkTtlHours: parseInt(process.env.DEMO_INVITE_LINK_TTL_HOURS || '48', 10),
+    demoAccessTtlDays: parseInt(process.env.DEMO_ACCESS_TTL_DAYS || '7', 10),
+  },
   microsoft: {
     clientId: process.env.MICROSOFT_CLIENT_ID || '',
     clientSecret: process.env.MICROSOFT_CLIENT_SECRET || '',

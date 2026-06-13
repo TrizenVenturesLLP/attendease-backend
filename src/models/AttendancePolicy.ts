@@ -38,23 +38,16 @@ export interface DayTimingRule {
   graceMinutes?: number;
 }
 
-export interface DefaultFullDayRule extends DayTimingRule {
-  startTime: string;
-  endTime: string;
-  expectedHours: number;
-  graceMinutes: number;
-}
-
 export interface WeekRule extends DayTimingRule {
   day: WeekDay;
   dayType: PolicyDayType;
-  useDefaultTiming: boolean;
+  useShiftTiming: boolean;
 }
 
 export interface IAttendancePolicy extends Document {
   organizationId: mongoose.Types.ObjectId;
   policyName: string;
-  defaultFullDayRule: DefaultFullDayRule;
+  shiftId: mongoose.Types.ObjectId;
   weekRules: WeekRule[];
   autoAbsentEnabled: boolean;
   allowRegularization: boolean;
@@ -66,21 +59,11 @@ export interface IAttendancePolicy extends Document {
   updatedAt: Date;
 }
 
-const DefaultFullDayRuleSchema = new Schema(
-  {
-    startTime: { type: String, required: true, match: /^([01]\d|2[0-3]):[0-5]\d$/ },
-    endTime: { type: String, required: true, match: /^([01]\d|2[0-3]):[0-5]\d$/ },
-    expectedHours: { type: Number, required: true, min: 0, max: 24 },
-    graceMinutes: { type: Number, required: true, min: 0, max: 120, default: 15 },
-  },
-  { _id: false }
-);
-
 const WeekRuleSchema = new Schema(
   {
     day: { type: String, enum: Object.values(WeekDay), required: true },
     dayType: { type: String, enum: Object.values(PolicyDayType), required: true },
-    useDefaultTiming: { type: Boolean, default: true },
+    useShiftTiming: { type: Boolean, default: true },
     startTime: { type: String, match: /^([01]\d|2[0-3]):[0-5]\d$/ },
     endTime: { type: String, match: /^([01]\d|2[0-3]):[0-5]\d$/ },
     expectedHours: { type: Number, min: 0, max: 24 },
@@ -103,9 +86,11 @@ const AttendancePolicySchema = new Schema<IAttendancePolicy>(
       trim: true,
       maxlength: 120,
     },
-    defaultFullDayRule: {
-      type: DefaultFullDayRuleSchema,
+    shiftId: {
+      type: Schema.Types.ObjectId,
+      ref: 'Shift',
       required: true,
+      index: true,
     },
     weekRules: {
       type: [WeekRuleSchema],

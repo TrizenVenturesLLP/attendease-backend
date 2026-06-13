@@ -12,6 +12,7 @@ import PayrollRun, { PayrollRunStatus } from '../models/PayrollRun';
 import NotificationRead from '../models/NotificationRead';
 import { leaveService } from './leaveService';
 import { attendanceService } from './attendanceService';
+import { attendanceRegularizationService } from './attendanceRegularizationService';
 import { REQUEST_TYPE_LABELS } from '../utils/attendanceRegularizationValidation';
 
 export type NotificationItemType =
@@ -186,7 +187,7 @@ export class NotificationService {
             id: `leave-pending:${lid}`,
             type: 'leave_pending',
             title: 'Leave approval needed',
-            body: `${name} requested leave (${row.leaveType}, ${row.totalDays} day(s)).`,
+            body: `${name} requested leave (${(row.leaveTypeId as { name?: string })?.name ?? 'leave'}, ${row.totalDays} day(s)).`,
             href: '/dashboard/leave-approvals',
             createdAt: toIso(row.createdAt as Date),
           });
@@ -195,14 +196,8 @@ export class NotificationService {
 
       // Pending attendance regularizations (HR / Admin only)
       if (role === UserRole.ADMIN || role === UserRole.HR) {
-        const pendingRegularizations = await AttendanceRegularization.find({
-          organizationId: orgId,
-          status: RegularizationStatus.PENDING,
-        })
-          .populate('userId', 'firstName lastName email')
-          .sort({ createdAt: -1 })
-          .limit(20)
-          .lean();
+        const pendingRegularizations =
+          await attendanceRegularizationService.getPendingForNotifications(orgId, role, 20);
 
         for (const row of pendingRegularizations) {
           const u = row.userId as { firstName?: string; lastName?: string; email?: string };
@@ -236,22 +231,25 @@ export class NotificationService {
         const outcomes = await Leave.find({
           organizationId: orgId,
           userId: userId,
-          status: { $in: [LeaveStatus.APPROVED, LeaveStatus.REJECTED] },
+          status: { $in: [LeaveStatus.APPROVED, LeaveStatus.REJECTED, 'approved', 'rejected'] },
           updatedAt: { $gte: since },
         })
+          .populate('leaveTypeId', 'name')
           .sort({ updatedAt: -1 })
           .limit(12)
           .lean();
 
         for (const row of outcomes) {
-          const statusLabel = row.status === LeaveStatus.APPROVED ? 'approved' : 'rejected';
+          const statusLabel =
+            String(row.status).toUpperCase() === LeaveStatus.APPROVED ? 'approved' : 'rejected';
+          const typeName = (row.leaveTypeId as { name?: string })?.name ?? 'leave';
           items.push({
             id: `leave-outcome:${row._id}`,
             type: 'leave_outcome',
             title: `Leave request ${statusLabel}`,
-            body: `Your ${row.leaveType} leave (${row.totalDays} day(s)) was ${statusLabel}.`,
+            body: `Your ${typeName} leave (${row.totalDays} day(s)) was ${statusLabel}.`,
             href: '/dashboard/my-leave',
-            createdAt: toIso((row.reviewedAt as Date) || (row.updatedAt as Date)),
+            createdAt: toIso(row.updatedAt as Date),
           });
         }
       }

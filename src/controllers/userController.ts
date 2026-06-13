@@ -20,8 +20,10 @@ class UserController {
       }
 
       let organizationId = req.organizationId || req.body.organizationId;
-      if (req.body.role !== UserRole.SUPER_ADMIN) {
+      if (req.body.role !== UserRole.SUPER_ADMIN && !organizationId) {
         organizationId = await resolveOrganizationId(req);
+      } else if (organizationId && !req.organizationId) {
+        req.organizationId = organizationId;
       }
 
       const userData: CreateUserData = {
@@ -463,22 +465,6 @@ class UserController {
       };
 
       res.status(200).json(response);
-    } catch (error) {
-      next(error);
-    }
-  }
-
-  async updateUserShift(req: Request, res: Response, next: NextFunction): Promise<void> {
-    try {
-      const { id } = req.params;
-      const { shiftId } = req.body;
-      const user = await userService.updateUserShift(id, shiftId ?? null, req.organizationId!);
-      res.status(200).json({
-        success: true,
-        message: 'Shift updated',
-        data: user,
-        timestamp: new Date().toISOString(),
-      });
     } catch (error) {
       next(error);
     }

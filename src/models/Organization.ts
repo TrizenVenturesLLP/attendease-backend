@@ -52,6 +52,12 @@ export interface IOrganization extends Document {
   deletedAt?: Date;
   subscriptionPlan: SubscriptionPlan;
   subscriptionExpiry?: Date;
+  /** True for sales/prospect sandbox tenants created via demo invitations. */
+  isDemoTenant?: boolean;
+  /** When the demo tenant access ends (org-level lock). */
+  demoExpiresAt?: Date;
+  /** Display label for the prospect company (e.g. "Company A"). */
+  prospectLabel?: string;
   settings: OrganizationSettings;
   microsoftAuth: MicrosoftAuthConfig;
   createdBy?: mongoose.Types.ObjectId;
@@ -190,6 +196,18 @@ const OrganizationSchema = new Schema<IOrganization>(
     },
     subscriptionExpiry: {
       type: Date,
+    },
+    isDemoTenant: {
+      type: Boolean,
+      default: false,
+      index: true,
+    },
+    demoExpiresAt: {
+      type: Date,
+    },
+    prospectLabel: {
+      type: String,
+      trim: true,
     },
     settings: {
       type: OrganizationSettingsSchema,

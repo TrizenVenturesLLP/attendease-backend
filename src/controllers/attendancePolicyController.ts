@@ -100,6 +100,16 @@ export class AttendancePolicyController {
       res.status(400).json({ success: false, error: error.message });
     }
   }
+
+  async delete(req: Request, res: Response): Promise<void> {
+    try {
+      await attendancePolicyService.deletePolicy(req.params.id, req.organizationId!);
+      res.status(200).json({ success: true, message: 'Attendance policy deleted' });
+    } catch (error: any) {
+      const status = error.statusCode === 404 ? 404 : 400;
+      res.status(status).json({ success: false, error: error.message });
+    }
+  }
 }
 
 export const attendancePolicyController = new AttendancePolicyController();

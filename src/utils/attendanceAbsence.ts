@@ -2,12 +2,13 @@ import { startOfDay, endOfDay, eachDayOfInterval, format } from 'date-fns';
 import Attendance, { AttendanceStatus, IAttendance } from '../models/Attendance';
 import Leave, { LeaveStatus } from '../models/Leave';
 import User from '../models/User';
-import AttendancePolicy, { IAttendancePolicy, PolicyDayType } from '../models/AttendancePolicy';
-import { attendancePolicyService } from '../services/attendancePolicyService';
+import { PolicyDayType } from '../models/AttendancePolicy';
 import {
   dateToWeekDay,
   resolveDayRule,
 } from './attendancePolicyValidation';
+import { resolveUserAttendancePolicy } from './resolveUserAttendancePolicy';
+import { loadPolicyShiftTiming } from './policyShiftTiming';
 import { getNonWorkingHolidayDateKeys, toDateKey } from './workingDays';
 
 /** Last calendar day that can be marked absent (yesterday — today is still in progress). */
@@ -44,32 +45,15 @@ function isDateOnApprovedLeave(
   );
 }
 
-async function getUserPolicy(user: {
-  organizationId: { toString(): string };
-  attendancePolicyId?: { toString(): string };
-}): Promise<IAttendancePolicy | null> {
-  const organizationId = user.organizationId.toString();
-  let policy: IAttendancePolicy | null = user.attendancePolicyId
-    ? await AttendancePolicy.findOne({
-        _id: user.attendancePolicyId,
-        organizationId,
-        status: 'ACTIVE',
-      }).lean()
-    : null;
-
-  if (!policy) {
-    policy = await attendancePolicyService.getDefaultPolicy(organizationId);
-  }
-  return policy;
-}
-
 export async function isPolicyWorkingDay(
   userId: string,
   _organizationId: string,
   date: Date,
   holidayDateKeys: Set<string>
 ): Promise<boolean> {
-  const user = await User.findById(userId).select('joiningDate createdAt attendancePolicyId organizationId').lean();
+  const user = await User.findById(userId)
+    .select('joiningDate createdAt attendancePolicyId organizationId department')
+    .lean();
   if (!user) return false;
 
   const joinDate = getEffectiveJoinDate(user);
@@ -77,11 +61,12 @@ export async function isPolicyWorkingDay(
   if (day < joinDate) return false;
   if (holidayDateKeys.has(toDateKey(day))) return false;
 
-  const policy = await getUserPolicy(user);
+  const policy = await resolveUserAttendancePolicy(user);
   if (!policy) return false;
 
+  const shift = await loadPolicyShiftTiming(policy);
   const weekDay = dateToWeekDay(day);
-  const dayRule = resolveDayRule(policy.weekRules, policy.defaultFullDayRule, weekDay);
+  const dayRule = resolveDayRule(policy.weekRules, shift, weekDay);
   return dayRule.dayType !== PolicyDayType.WEEKLY_OFF;
 }
 
