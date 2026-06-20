@@ -3,8 +3,11 @@ FROM node:20-alpine AS builder
 
 WORKDIR /app
 
-# Cache-bust: pass --build-arg CACHEBUST=$(date +%s) or CACHEBUST=$COMMIT_SHA to force fresh build
+# Cache-bust: CapRover injects CAPROVER_GIT_COMMIT_SHA on Git deploy; each commit = fresh build
+# Fallback: pass --build-arg CACHEBUST=$(date +%s) for manual/CI builds
 ARG CACHEBUST=1
+ARG CAPROVER_GIT_COMMIT_SHA=unknown
+RUN echo "Build: commit=${CAPROVER_GIT_COMMIT_SHA} cachebust=${CACHEBUST}"
 
 # Copy package files
 COPY package*.json ./
@@ -12,9 +15,6 @@ COPY tsconfig.json ./
 
 # Install dependencies (cache invalidated when package*.json changes)
 RUN npm ci
-
-# Invalidate cache when CACHEBUST changes (pass --build-arg CACHEBUST=$(date +%s) in deployment)
-RUN echo "Cache bust: ${CACHEBUST}"
 
 # Copy source code
 COPY src ./src

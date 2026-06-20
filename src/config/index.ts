@@ -11,18 +11,45 @@ interface MicrosoftConfig {
   authority: string;
 }
 
+/** Database name when MONGO_URI has no path (Atlas default is "test"). */
+export function resolveMongoDbName(mongoUri: string): string {
+  const fromEnv = process.env.MONGO_DB?.trim();
+  if (fromEnv) {
+    return fromEnv;
+  }
+
+  try {
+    const normalized = mongoUri.replace(/^mongodb\+srv:\/\//, 'https://').replace(/^mongodb:\/\//, 'http://');
+    const parsed = new URL(normalized);
+    const pathDb = parsed.pathname.replace(/^\//, '').split('/')[0]?.trim();
+    if (pathDb) {
+      return pathDb;
+    }
+  } catch {
+    // fall through
+  }
+
+  return 'trizenhr';
+}
+
 interface Config {
   port: number;
   nodeEnv: string;
   mongoUri: string;
+  mongoDbName: string;
   jwtSecret: string;
   jwtExpiresIn: string;
   corsOrigin: string | string[];
   frontendUrl: string;
+  /** Optional fixed subdomain for tenants (e.g. "org" -> abc.org.trizenhr.com). Empty = tenant at first label (abc.trizenhr.com). */
+  tenantSubdomainSegment: string;
   emailService: {
     url: string;
-    supportEmail: string;
     authToken: string;
+    /** Shown in staff invite footers / org-facing copy */
+    supportEmail: string;
+    /** Organization onboarding & company-admin invites (From: support@trizenhr.com) */
+    platformSupportEmail: string;
   };
   invitation: {
     baseUrl: string;
@@ -32,6 +59,10 @@ interface Config {
     frontendPort: string;
     frontendProtocol: string;
   };
+  demoInvitations: {
+    inviteLinkTtlHours: number;
+    demoAccessTtlDays: number;
+  };
   microsoft: MicrosoftConfig;
 }
 
@@ -39,16 +70,26 @@ const config: Config = {
   port: parseInt(process.env.PORT || '5000', 10),
   nodeEnv: process.env.NODE_ENV || 'development',
   mongoUri: process.env.MONGO_URI!,
+  mongoDbName: resolveMongoDbName(process.env.MONGO_URI || ''),
   jwtSecret: process.env.JWT_SECRET || 'your-super-secret-jwt-key-change-in-production',
   jwtExpiresIn: process.env.JWT_EXPIRES_IN || '7d',
-  corsOrigin: process.env.CORS_ORIGIN 
+  corsOrigin: process.env.CORS_ORIGIN
     ? process.env.CORS_ORIGIN.split(',').map(origin => origin.trim())
     : ['http://localhost:3000'],
   frontendUrl: process.env.FRONTEND_URL || 'http://localhost:3000',
+  tenantSubdomainSegment: (
+    process.env.TENANT_SUBDOMAIN_SEGMENT ||
+    process.env.TENANT_SUBDOMAIN ||
+    ''
+  )
+    .trim()
+    .toLowerCase(),
   emailService: {
-    url: process.env.EMAIL_SERVICE_URL || 'http://localhost:3002',
-    supportEmail: process.env.TRIZEN_SUPPORT_EMAIL || 'support@trizenventures.com',
+    url: process.env.EMAIL_SERVICE_URL || 'http://localhost:4007',
     authToken: process.env.EMAIL_SERVICE_AUTH_TOKEN || '',
+    supportEmail: process.env.TRIZEN_SUPPORT_EMAIL || 'support@trizenventures.com',
+    platformSupportEmail:
+      process.env.TRIZEN_PLATFORM_SUPPORT_EMAIL || 'support@trizenhr.com',
   },
   invitation: (() => {
     const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
@@ -75,11 +116,21 @@ const config: Config = {
         process.env.INVITATION_BASE_URL || `${frontendUrl.replace(/\/$/, '')}/auth/set-password`,
       expiryDays: parseInt(process.env.INVITATION_EXPIRY_DAYS || '7', 10),
       appDomain,
-      tenantSubdomain: (process.env.TENANT_SUBDOMAIN || 'org').trim().toLowerCase(),
+      tenantSubdomain: (
+        process.env.TENANT_SUBDOMAIN ||
+        process.env.TENANT_SUBDOMAIN_SEGMENT ||
+        ''
+      )
+        .trim()
+        .toLowerCase(),
       frontendPort: process.env.FRONTEND_PORT || '3000',
       frontendProtocol,
     };
   })(),
+  demoInvitations: {
+    inviteLinkTtlHours: parseInt(process.env.DEMO_INVITE_LINK_TTL_HOURS || '48', 10),
+    demoAccessTtlDays: parseInt(process.env.DEMO_ACCESS_TTL_DAYS || '7', 10),
+  },
   microsoft: {
     clientId: process.env.MICROSOFT_CLIENT_ID || '',
     clientSecret: process.env.MICROSOFT_CLIENT_SECRET || '',

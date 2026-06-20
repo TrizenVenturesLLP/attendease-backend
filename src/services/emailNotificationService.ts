@@ -2,7 +2,7 @@ import axios from 'axios';
 import config from '../config';
 import Organization from '../models/Organization';
 import User, { UserRole } from '../models/User';
-import { buildSetPasswordBaseUrl } from '../utils/inviteUrl';
+import { buildSetPasswordBaseUrl, buildDemoInviteLink } from '../utils/inviteUrl';
 import { logger } from '../utils/logger';
 
 interface OrganizationCreatedEmailInput {
@@ -38,9 +38,22 @@ function formatAxiosError(error: unknown): Record<string, unknown> {
 }
 
 class EmailNotificationService {
+  private isEmailConfigured(): boolean {
+    return Boolean(config.emailService.url);
+  }
+
+  private warnEmailSkipped(flow: string): void {
+    console.warn(
+      `[EmailNotificationService] Skipping ${flow}: set EMAIL_SERVICE_URL`
+    );
+  }
+
   private getHeaders(userId?: string) {
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
+      ...(config.emailService.authToken
+        ? { 'X-Service-Auth': config.emailService.authToken }
+        : {}),
       'X-Service-Name': 'trizenhr_backend',
     };
 
@@ -100,21 +113,42 @@ class EmailNotificationService {
     return inviteLink;
   }
 
+  /** Map app roles to email-service role slugs (handles string values from API/DB). */
   private mapRoleForEmailService(
-    role: UserRole
+    role: UserRole | string
   ): 'company_admin' | 'hr_admin' | 'manager' | 'employee' {
-    if (role === UserRole.ADMIN) {
+    const normalized = String(role).trim().toLowerCase().replace(/\s+/g, '_');
+
+    if (
+      normalized === UserRole.ADMIN ||
+      normalized === 'admin' ||
+      normalized === 'company_admin' ||
+      normalized === 'companyadmin'
+    ) {
       return 'company_admin';
     }
 
-    if (role === UserRole.HR) {
+    if (normalized === UserRole.HR || normalized === 'hr' || normalized === 'hr_admin') {
       return 'hr_admin';
     }
 
-    if (role === UserRole.SUPERVISOR) {
+    if (
+      normalized === UserRole.SUPERVISOR ||
+      normalized === 'supervisor' ||
+      normalized === 'manager'
+    ) {
       return 'manager';
     }
 
+    if (normalized === UserRole.EMPLOYEE || normalized === 'employee') {
+      return 'employee';
+    }
+
+    if (normalized === UserRole.SUPER_ADMIN || normalized === 'super_admin') {
+      return 'company_admin';
+    }
+
+    logger.warn('Unknown role for invitation email, defaulting to employee', { role });
     return 'employee';
   }
 
@@ -145,12 +179,12 @@ class EmailNotificationService {
   }
 
   async sendOrganizationCreatedFlow(input: OrganizationCreatedEmailInput): Promise<void> {
-    const endpoint = `${config.emailService.url}/api/v1/email/organization-created`;
-
-    if (!config.emailService.url) {
-      logger.warn('Organization-created email skipped: EMAIL_SERVICE_URL not set');
+    if (!this.isEmailConfigured()) {
+      this.warnEmailSkipped('organization-created');
       return;
     }
+
+    const endpoint = `${config.emailService.url}/api/v1/email/organization-created`;
 
     if (!config.emailService.authToken) {
       logger.warn('Organization-created email skipped: EMAIL_SERVICE_AUTH_TOKEN not set');
@@ -182,7 +216,8 @@ class EmailNotificationService {
           inviteExpiresAt: inviteExpiresAt.toISOString(),
           createdByName,
           platformName: 'TrizenHR',
-          supportEmail: config.emailService.supportEmail,
+          platformSupportEmail: config.emailService.platformSupportEmail,
+          companyAdminRole: 'company_admin',
         },
         {
           headers: this.getHeaders(input.createdByUserId),
@@ -192,7 +227,8 @@ class EmailNotificationService {
 
       logger.info('Organization-created email API OK', {
         status: response.status,
-        data: response.data,
+        organizationId: input.organizationId,
+        companyAdminEmail: input.companyAdminEmail,
       });
     } catch (error) {
       logger.error('Organization-created email failed', formatAxiosError(error));
@@ -201,12 +237,12 @@ class EmailNotificationService {
   }
 
   async sendRoleInvitation(input: UserInvitationInput): Promise<void> {
-    const endpoint = `${config.emailService.url}/api/v1/email/role-invitation`;
-
-    if (!config.emailService.url) {
-      logger.warn('Role invitation skipped: EMAIL_SERVICE_URL not set');
+    if (!this.isEmailConfigured()) {
+      this.warnEmailSkipped('role-invitation');
       return;
     }
+
+    const endpoint = `${config.emailService.url}/api/v1/email/role-invitation`;
 
     if (!config.emailService.authToken) {
       logger.warn('Role invitation skipped: EMAIL_SERVICE_AUTH_TOKEN not set');
@@ -262,11 +298,11 @@ class EmailNotificationService {
         timeout: 10000,
       });
 
-      logger.info('Role invitation email API OK (queued on email service)', {
+      logger.info('Role invitation email API OK', {
         status: response.status,
-        data: response.data,
         to: input.email,
         mappedRole,
+        organizationName,
       });
     } catch (error) {
       logger.error('Role invitation email API failed', {
@@ -276,6 +312,172 @@ class EmailNotificationService {
       });
       throw error;
     }
+  }
+
+  async sendDemoInvitation(input: {
+    email: string;
+    role: UserRole;
+    organizationId: string;
+    companyName: string;
+    rawToken: string;
+    inviteExpiresAt: Date;
+    demoAccessTtlDays: number;
+    invitedByUserId: string;
+    firstName?: string;
+    lastName?: string;
+    subdomain?: string;
+  }): Promise<void> {
+    if (!this.isEmailConfigured()) {
+      this.warnEmailSkipped('demo-invitation');
+      return;
+    }
+
+    const endpoint = `${config.emailService.url}/api/v1/email/demo-invitation`;
+
+    if (!config.emailService.authToken) {
+      logger.warn('Demo invitation skipped: EMAIL_SERVICE_AUTH_TOKEN not set');
+      return;
+    }
+
+    const inviteLink = buildDemoInviteLink(input.rawToken, input.subdomain);
+    const mappedRole = this.mapRoleForEmailService(input.role);
+    const name = [input.firstName, input.lastName].filter(Boolean).join(' ').trim() || undefined;
+
+    logger.info('Sending demo invitation email', {
+      endpoint,
+      to: input.email,
+      companyName: input.companyName,
+      inviteLink,
+    });
+
+    try {
+      await axios.post(
+        endpoint,
+        {
+          email: input.email,
+          role: mappedRole,
+          inviteLink,
+          inviteExpiresAt: input.inviteExpiresAt.toISOString(),
+          demoAccessTtlDays: input.demoAccessTtlDays,
+          companyName: input.companyName,
+          inviterName: 'Trizen HR Demo Team',
+          platformName: 'TrizenHR Demo',
+          name,
+          supportEmail: config.emailService.platformSupportEmail,
+        },
+        {
+          headers: this.getHeaders(input.invitedByUserId),
+          timeout: 10000,
+        }
+      );
+
+      logger.info('Demo invitation email API OK', { to: input.email });
+    } catch (error) {
+      logger.error('Demo invitation email failed', formatAxiosError(error));
+      throw error;
+    }
+  }
+
+  async sendPasswordReset(
+    email: string,
+    name: string,
+    resetLink: string,
+    expiresAt: Date
+  ): Promise<void> {
+    if (!this.isEmailConfigured()) {
+      this.warnEmailSkipped('password-reset');
+      return;
+    }
+
+    console.info('[EmailNotificationService] Triggering password-reset email', {
+      email,
+      emailServiceUrl: config.emailService.url,
+    });
+
+    try {
+      await axios.post(
+        `${config.emailService.url}/api/v1/email/password-reset`,
+        {
+          email,
+          name,
+          resetLink,
+          expiresAt: expiresAt.toISOString(),
+          platformName: 'TrizenHR',
+        },
+        {
+          headers: this.getHeaders(),
+          timeout: 5000,
+        }
+      );
+      console.info('[EmailNotificationService] password-reset email accepted by email service', {
+        email,
+      });
+    } catch (error: any) {
+      const status = error?.response?.status;
+      const detail = error?.response?.data;
+      console.warn('Password reset email flow failed:', error?.message || error, {
+        status,
+        detail,
+      });
+    }
+  }
+
+  async sendBirthdayEmail(input: {
+    email: string;
+    name: string;
+    organizationName?: string;
+  }): Promise<void> {
+    if (!this.isEmailConfigured()) {
+      this.warnEmailSkipped('birthday');
+      return;
+    }
+
+    const endpoint = `${config.emailService.url}/api/v1/email/birthday`;
+
+    if (!config.emailService.authToken) {
+      logger.warn('Birthday email skipped: EMAIL_SERVICE_AUTH_TOKEN not set');
+      return;
+    }
+
+    try {
+      await axios.post(
+        endpoint,
+        {
+          email: input.email,
+          name: input.name,
+          organizationName: input.organizationName,
+          platformName: 'TrizenHR',
+        },
+        {
+          headers: this.getHeaders(),
+          timeout: 10000,
+        }
+      );
+      logger.info('Birthday email API OK', { to: input.email });
+    } catch (error) {
+      logger.error('Birthday email failed', formatAxiosError(error));
+      throw error;
+    }
+  }
+}
+
+export function logEmailServiceConfigAtStartup(): void {
+  const urlSet = Boolean(config.emailService.url);
+  const tokenSet = Boolean(config.emailService.authToken);
+  const configured = urlSet && tokenSet;
+
+  console.info('[EmailNotificationService] Startup config', {
+    configured,
+    emailServiceUrl: urlSet ? config.emailService.url : '(missing EMAIL_SERVICE_URL)',
+    authTokenSet: tokenSet,
+    supportEmail: config.emailService.supportEmail,
+    invitationBaseUrl: config.invitation.baseUrl,
+  });
+
+  if (!configured) {
+    console.warn(
+      '[EmailNotificationService] Emails are DISABLED until EMAIL_SERVICE_URL and EMAIL_SERVICE_AUTH_TOKEN are set in CapRover (token must match email service SERVICE_AUTH_TOKEN)'
+    );
   }
 }
 

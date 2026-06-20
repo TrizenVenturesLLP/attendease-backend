@@ -1,6 +1,47 @@
 import Attendance, { AttendanceStatus } from '../models/Attendance';
-import { startOfDay, endOfDay } from 'date-fns';
-import { minioStorage } from '../utils/storage/MinIOStorage';
+import Leave, { LeaveStatus } from '../models/Leave';
+import User, { UserRole } from '../models/User';
+import { startOfDay, endOfDay, format } from 'date-fns';
+import { checkInMinioStorage } from '../utils/storage/MinIOStorage';
+import { parseTimeOnDate } from '../utils/organizationSettings';
+import { getNonWorkingHolidayDateKeys } from '../utils/workingDays';
+import {
+  buildImpliedAbsentRecords,
+  computeUserAttendanceStats,
+  isPolicyWorkingDay,
+} from '../utils/attendanceAbsence';
+import { attendanceResolver, mapResolvedToAttendanceStatus } from './attendanceResolver';
+import { shiftService } from './shiftService';
+
+const CHECKIN_PHOTO_TTL_SEC = 86400;
+
+async function enrichAttendancePhoto<T extends Record<string, unknown>>(record: T | null): Promise<T | null> {
+  if (!record) return record;
+
+  const key = record.photoKey as string | undefined;
+  if (!key) return record;
+
+  try {
+    const photoUrl = await checkInMinioStorage.getPresignedUrl(key, CHECKIN_PHOTO_TTL_SEC);
+    return { ...record, photoUrl, hasCheckInPhoto: true };
+  } catch (error) {
+    console.warn('Could not generate check-in photo URL:', (error as Error).message);
+    return record;
+  }
+}
+
+async function enrichAttendancePhotos<T extends Record<string, unknown>>(records: T[]): Promise<T[]> {
+  const withKeys = records.map((record) => {
+    if (record.date && !record.dateKey) {
+      return {
+        ...record,
+        dateKey: format(startOfDay(new Date(record.date as string | Date)), 'yyyy-MM-dd'),
+      };
+    }
+    return record;
+  });
+  return Promise.all(withKeys.map(r => enrichAttendancePhoto(r).then(x => x ?? r)));
+}
 
 export class AttendanceService {
   /**
@@ -9,7 +50,6 @@ export class AttendanceService {
   async checkIn(userId: string, organizationId: string, photoData?: string): Promise<any> {
     const today = startOfDay(new Date());
 
-    // Check if already checked in today
     const existingAttendance = await Attendance.findOne({
       userId,
       organizationId,
@@ -20,42 +60,59 @@ export class AttendanceService {
       throw new Error('Already checked in today');
     }
 
-    const now = new Date();
-    const workStartTime = new Date(today);
-    workStartTime.setHours(9, 0, 0); // 9:00 AM
+    const resolved = await attendanceResolver.resolve(userId, today);
+    if (!resolved.isWorkingDay) {
+      if (resolved.isHoliday) {
+        throw new Error('Today is a holiday — check-in is not required');
+      }
+      if (resolved.isWeeklyOff) {
+        throw new Error('Today is a weekly off — check-in is not required');
+      }
+      if (resolved.hasLeave) {
+        throw new Error('You are on approved leave today');
+      }
+    }
 
-    // Determine status based on check-in time
-    const status = now > workStartTime ? AttendanceStatus.LATE : AttendanceStatus.PRESENT;
+    const now = new Date();
+    const workStartTime = resolved.startTime
+      ? parseTimeOnDate(today, resolved.startTime)
+      : parseTimeOnDate(today, '09:00');
+    const graceMinutes = resolved.graceMinutes ?? 15;
+    const graceEnd = new Date(workStartTime.getTime() + graceMinutes * 60 * 1000);
+
+    const status = now > graceEnd ? AttendanceStatus.LATE : AttendanceStatus.PRESENT;
 
     // Upload photo to MinIO if provided
-    let photoUrl: string | undefined;
+    let photoKey: string | undefined;
     if (photoData) {
       try {
         // Convert base64 to buffer
         const base64Data = photoData.replace(/^data:image\/\w+;base64,/, '');
         const imageBuffer = Buffer.from(base64Data, 'base64');
-        
-        // Create folder structure: attendance-photos/YYYY/MM/DD
+
+        const maxSize = 5 * 1024 * 1024;
+        if (imageBuffer.length > maxSize) {
+          throw new Error('Check-in photo must be under 5MB');
+        }
+
         const year = now.getFullYear();
         const month = String(now.getMonth() + 1).padStart(2, '0');
         const day = String(now.getDate()).padStart(2, '0');
-        const folder = `attendance-photos/${year}/${month}/${day}`;
-        
-        // Upload to MinIO
+        const folder = `org-${organizationId}/${year}/${month}/${day}`;
+
         const fileName = `${userId}_checkin_${now.getTime()}.jpg`;
-        const result = await minioStorage.uploadFile(
+        const result = await checkInMinioStorage.uploadFile(
           imageBuffer,
           fileName,
           'image/jpeg',
           folder,
           { userId, type: 'checkin', date: today.toISOString() }
         );
-        
-        photoUrl = result.url;
+
+        photoKey = result.key;
       } catch (uploadError: any) {
-        console.error('Failed to upload photo:', uploadError.message);
-        // Don't fail check-in if photo upload fails
-        photoUrl = undefined;
+        console.error('Failed to upload check-in photo:', uploadError.message);
+        photoKey = undefined;
       }
     }
 
@@ -65,10 +122,10 @@ export class AttendanceService {
       date: today,
       checkIn: now,
       status,
-      photoUrl,
+      photoKey,
     });
 
-    return attendance;
+    return enrichAttendancePhoto(attendance.toObject() as unknown as Record<string, unknown>);
   }
 
   /**
@@ -94,6 +151,10 @@ export class AttendanceService {
     attendance.checkOut = new Date();
     await attendance.save(); // Pre-save hook will calculate working hours
 
+    const resolved = await attendanceResolver.resolve(userId, today);
+    attendance.status = mapResolvedToAttendanceStatus(resolved.attendanceStatus);
+    await attendance.save();
+
     return attendance;
   }
 
@@ -103,13 +164,70 @@ export class AttendanceService {
   async getTodayStatus(userId: string, organizationId: string): Promise<any> {
     const today = startOfDay(new Date());
 
-    const attendance = await Attendance.findOne({
-      userId,
-      organizationId,
-      date: today,
-    });
+    const [attendance, resolved] = await Promise.all([
+      Attendance.findOne({ userId, organizationId, date: today }),
+      attendanceResolver.resolve(userId, today),
+    ]);
 
-    return attendance;
+    const enriched = attendance
+      ? await enrichAttendancePhoto(attendance.toObject() as unknown as Record<string, unknown>)
+      : null;
+
+    return {
+      record: enriched,
+      policy: resolved,
+    };
+  }
+
+  async getResolvedAttendance(
+    userId: string,
+    date?: Date
+  ): Promise<any> {
+    return attendanceResolver.resolve(userId, date ?? startOfDay(new Date()));
+  }
+
+  async getMyPolicySummary(userId: string): Promise<any> {
+    const [resolved, user] = await Promise.all([
+      attendanceResolver.resolveToday(userId),
+      User.findById(userId).select('attendancePolicyId organizationId department').lean(),
+    ]);
+
+    if (!user?.organizationId) {
+      return resolved;
+    }
+
+    const { resolveUserAttendancePolicy } = await import('../utils/resolveUserAttendancePolicy');
+    const policy = await resolveUserAttendancePolicy(user);
+
+    let shift: {
+      shiftName: string;
+      startTime: string;
+      endTime: string;
+      expectedHours: number;
+    } | null = null;
+
+    if (policy?.shiftId) {
+      const shiftDoc = await shiftService.getShiftById(
+        policy.shiftId.toString(),
+        user.organizationId.toString()
+      );
+      if (shiftDoc) {
+        shift = {
+          shiftName: shiftDoc.shiftName,
+          startTime: shiftDoc.startTime,
+          endTime: shiftDoc.endTime,
+          expectedHours: shiftDoc.expectedHours,
+        };
+      }
+    }
+
+    return {
+      ...resolved,
+      policyName: policy?.policyName ?? resolved.policyName,
+      weekRules: policy?.weekRules ?? [],
+      shiftId: policy?.shiftId?.toString?.() ?? resolved.shiftId,
+      shift,
+    };
   }
 
   /**
@@ -120,35 +238,75 @@ export class AttendanceService {
     organizationId: string,
     startDate?: Date,
     endDate?: Date,
+    status?: AttendanceStatus,
     page: number = 1,
     limit: number = 30
   ): Promise<any> {
-    const query: any = { userId, organizationId };
-
-    if (startDate || endDate) {
-      query.date = {};
-      if (startDate) query.date.$gte = startOfDay(startDate);
-      if (endDate) query.date.$lte = endOfDay(endDate);
+    const user = await User.findById(userId).select('createdAt joiningDate').lean();
+    if (!user) {
+      throw new Error('User not found');
     }
 
-    const skip = (page - 1) * limit;
+    const joinDate = user.joiningDate ?? user.createdAt;
 
-    const [records, total] = await Promise.all([
-      Attendance.find(query)
-        .sort({ date: -1 })
-        .skip(skip)
-        .limit(limit)
-        .lean(),
-      Attendance.countDocuments(query),
-    ]);
+    const query: any = { userId, organizationId };
+    const rangeStart = startDate ? startOfDay(startDate) : undefined;
+    const rangeEnd = endDate ? startOfDay(endDate) : undefined;
+
+    if (rangeStart || rangeEnd) {
+      query.date = {};
+      if (rangeStart) query.date.$gte = rangeStart;
+      if (rangeEnd) query.date.$lte = endOfDay(rangeEnd);
+    }
+
+    const dbQuery = { ...query };
+    if (status && status !== AttendanceStatus.ABSENT) {
+      dbQuery.status = status;
+    } else if (status === AttendanceStatus.ABSENT) {
+      // Fetch all statuses in range — implied absents merged below
+      delete dbQuery.status;
+    }
+
+    const dbRecords = await Attendance.find(dbQuery).sort({ date: -1 }).lean();
+
+    type AttendanceRow = Record<string, unknown>;
+    let merged: AttendanceRow[] = dbRecords as unknown as AttendanceRow[];
+
+    const shouldIncludeImplied =
+      !status || status === AttendanceStatus.ABSENT;
+
+    if (shouldIncludeImplied && rangeStart && rangeEnd) {
+      const implied = await buildImpliedAbsentRecords(
+        userId,
+        organizationId,
+        rangeStart,
+        rangeEnd,
+        joinDate,
+        dbRecords
+      );
+      merged = [...merged, ...(implied as unknown as AttendanceRow[])];
+      if (status === AttendanceStatus.ABSENT) {
+        merged = merged.filter((r) => r.status === AttendanceStatus.ABSENT);
+      }
+    } else if (status) {
+      merged = dbRecords.filter((r) => r.status === status) as unknown as AttendanceRow[];
+    }
+
+    merged.sort(
+      (a, b) => new Date(b.date as Date).getTime() - new Date(a.date as Date).getTime()
+    );
+
+    const total = merged.length;
+    const skip = (page - 1) * limit;
+    const paged = merged.slice(skip, skip + limit);
 
     return {
-      records,
+      records: await enrichAttendancePhotos(paged),
       pagination: {
         total,
         page,
         limit,
-        pages: Math.ceil(total / limit),
+        pages: Math.ceil(total / limit) || 1,
       },
     };
   }
@@ -157,36 +315,27 @@ export class AttendanceService {
    * Get attendance statistics for a user
    */
   async getUserStats(userId: string, organizationId: string, month?: number, year?: number): Promise<any> {
+    const user = await User.findById(userId).select('createdAt joiningDate').lean();
+    if (!user) {
+      throw new Error('User not found');
+    }
+
+    const joinDate = user.joiningDate ?? user.createdAt;
+
     const now = new Date();
-    // Month is 1-indexed from API (1 = January), convert to 0-indexed for Date constructor
     const targetMonth = month ? month - 1 : now.getMonth();
     const targetYear = year ?? now.getFullYear();
 
     const startDate = new Date(targetYear, targetMonth, 1);
     const endDate = new Date(targetYear, targetMonth + 1, 0);
 
-    const records = await Attendance.find({
+    return computeUserAttendanceStats(
       userId,
       organizationId,
-      date: { $gte: startDate, $lte: endDate },
-    });
-
-    const stats = {
-      totalDays: records.length,
-      presentDays: records.filter((r) => r.status === AttendanceStatus.PRESENT).length,
-      lateDays: records.filter((r) => r.status === AttendanceStatus.LATE).length,
-      absentDays: records.filter((r) => r.status === AttendanceStatus.ABSENT).length,
-      halfDays: records.filter((r) => r.status === AttendanceStatus.HALF_DAY).length,
-      leaveDays: records.filter((r) => r.status === AttendanceStatus.ON_LEAVE).length,
-      totalWorkingHours: records.reduce((sum, r) => sum + (r.workingHours || 0), 0),
-      averageWorkingHours:
-        records.filter((r) => r.workingHours).length > 0
-          ? records.reduce((sum, r) => sum + (r.workingHours || 0), 0) /
-            records.filter((r) => r.workingHours).length
-          : 0,
-    };
-
-    return stats;
+      startDate,
+      endDate,
+      joinDate
+    );
   }
 
   /**
@@ -200,6 +349,8 @@ export class AttendanceService {
       endDate?: Date;
       status?: AttendanceStatus;
       department?: string;
+      attendancePolicyId?: string;
+      dayType?: string;
     },
     page: number = 1,
     limit: number = 50
@@ -221,6 +372,16 @@ export class AttendanceService {
       query.status = filters.status;
     }
 
+    // Department / policy filter via User lookup
+    const userFilter: Record<string, unknown> = { organizationId };
+    if (filters.department) userFilter.department = filters.department;
+    if (filters.attendancePolicyId) userFilter.attendancePolicyId = filters.attendancePolicyId;
+
+    if (filters.department || filters.attendancePolicyId) {
+      const matchedUsers = await User.find(userFilter).select('_id');
+      query.userId = { $in: matchedUsers.map((u) => u._id) };
+    }
+
     const skip = (page - 1) * limit;
 
     const [records, total] = await Promise.all([
@@ -234,7 +395,7 @@ export class AttendanceService {
     ]);
 
     return {
-      records,
+      records: await enrichAttendancePhotos(records as unknown as Record<string, unknown>[]),
       pagination: {
         total,
         page,
@@ -242,6 +403,84 @@ export class AttendanceService {
         pages: Math.ceil(total / limit),
       },
     };
+  }
+
+  /**
+   * Mark absent for active users on a working day with no punch, leave, or existing record.
+   */
+  async markAutoAbsent(
+    organizationId: string,
+    targetDate: Date
+  ): Promise<{ marked: number; skipped: number; notWorkingDay: boolean }> {
+    const date = startOfDay(targetDate);
+    const today = startOfDay(new Date());
+
+    if (date >= today) {
+      throw new Error('Auto absent can only be run for past dates');
+    }
+
+    const holidayDateKeys = await getNonWorkingHolidayDateKeys(organizationId, date, date);
+
+    const users = await User.find({
+      organizationId,
+      isActive: true,
+      role: {
+        $in: [UserRole.EMPLOYEE, UserRole.SUPERVISOR, UserRole.HR, UserRole.ADMIN],
+      },
+    }).select('_id createdAt joiningDate attendancePolicyId');
+
+    let marked = 0;
+    let skipped = 0;
+    let anyWorkingDay = false;
+
+    for (const user of users) {
+      const userId = user._id.toString();
+      const joined = startOfDay(new Date(user.joiningDate ?? user.createdAt));
+      if (date < joined) {
+        skipped += 1;
+        continue;
+      }
+
+      const workingDay = await isPolicyWorkingDay(userId, organizationId, date, holidayDateKeys);
+      if (!workingDay) {
+        skipped += 1;
+        continue;
+      }
+      anyWorkingDay = true;
+
+      const existing = await Attendance.findOne({ organizationId, userId, date });
+      if (existing) {
+        skipped += 1;
+        continue;
+      }
+
+      const onApprovedLeave = await Leave.exists({
+        organizationId,
+        userId,
+        status: LeaveStatus.APPROVED,
+        startDate: { $lte: endOfDay(date) },
+        endDate: { $gte: date },
+      });
+      if (onApprovedLeave) {
+        skipped += 1;
+        continue;
+      }
+
+      await Attendance.create({
+        organizationId,
+        userId,
+        date,
+        status: AttendanceStatus.ABSENT,
+        isApproved: true,
+      });
+      marked += 1;
+    }
+
+    if (!anyWorkingDay && marked === 0) {
+      return { marked: 0, skipped, notWorkingDay: true };
+    }
+
+    return { marked, skipped, notWorkingDay: false };
   }
 }
 

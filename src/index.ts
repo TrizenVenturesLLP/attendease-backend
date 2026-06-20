@@ -1,11 +1,15 @@
 import createApp from './app';
 import config from './config';
 import connectDB from './config/db';
+import { logEmailServiceConfigAtStartup } from './services/emailNotificationService';
+import { startBirthdayEmailScheduler } from './jobs/birthdayEmailScheduler';
 
 const startServer = async (): Promise<void> => {
   try {
     // Connect to MongoDB
     await connectDB();
+
+    logEmailServiceConfigAtStartup();
 
     // Create Express app
     const app = createApp();
@@ -14,6 +18,7 @@ const startServer = async (): Promise<void> => {
     app.listen(config.port, () => {
       console.info(`🚀 Server running in ${config.nodeEnv} mode on port ${config.port}`);
       console.info(`📍 Health check: http://localhost:${config.port}/api/health`);
+      startBirthdayEmailScheduler();
     });
   } catch (error) {
     console.error('Failed to start server:', error);

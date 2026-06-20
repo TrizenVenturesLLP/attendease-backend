@@ -6,6 +6,9 @@ export interface IDepartment extends Document {
   description?: string;
   headOfDepartment?: mongoose.Types.ObjectId;
   members: mongoose.Types.ObjectId[];
+  departmentAttendancePolicyId?: mongoose.Types.ObjectId;
+  defaultLeavePolicyId?: mongoose.Types.ObjectId;
+  defaultPayrollPolicyId?: mongoose.Types.ObjectId;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -39,13 +42,18 @@ const DepartmentSchema = new Schema<IDepartment>(
         ref: 'User',
       },
     ],
+    departmentAttendancePolicyId: {
+      type: Schema.Types.ObjectId,
+      ref: 'AttendancePolicy',
+    },
+    defaultLeavePolicyId: { type: Schema.Types.ObjectId, ref: 'LeavePolicy', sparse: true },
+    defaultPayrollPolicyId: { type: Schema.Types.ObjectId, sparse: true },
   },
   {
     timestamps: true,
   }
 );
 
-// Index for efficient queries
 DepartmentSchema.index({ organizationId: 1, name: 1 }, { unique: true });
 DepartmentSchema.index({ organizationId: 1 });
 

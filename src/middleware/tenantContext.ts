@@ -1,14 +1,13 @@
 import { Request, Response, NextFunction } from 'express';
 import mongoose from 'mongoose';
-import Organization from '../models/Organization';
 import { UnauthorizedError, ForbiddenError } from '../utils/AppError';
 import { UserRole } from '../models/User';
 
 /**
  * Tenant Context Middleware
- * Extracts organizationId from JWT and validates organization
- * - Super Admin: Can access all organizations (no organizationId filter)
- * - Other roles: Must have organizationId and organization must be active
+ * Uses subdomain / tenant context and JWT to enforce tenant isolation
+ * - Super Admin: Platform-level access only (no organizationId filter by default)
+ * - Other roles: Must belong to the organization resolved from subdomain
  */
 export const tenantContext = async (
   req: Request,
@@ -23,14 +22,17 @@ export const tenantContext = async (
 
     const { role, organizationId } = req.user;
 
-    // Super Admin can access all organizations - skip organization check
+    // Super Admin can access all organizations - platform only by default
     if (role === UserRole.SUPER_ADMIN) {
-      req.organizationId = undefined; // Super Admin has no organization filter
+      // Super Admin requests should normally come from the platform domain.
+      // For safety, we do not attach an organizationId here; Super Admin can
+      // optionally override organizationId via allowOrganizationOverride on the
+      // platform (e.g. ?organizationId=...).
       next();
       return;
     }
 
-    // All other roles must have an organizationId
+    // All other roles must have an organizationId in the token
     if (!organizationId) {
       throw new UnauthorizedError('No organization associated with user');
     }
@@ -40,21 +42,22 @@ export const tenantContext = async (
       throw new UnauthorizedError('Invalid organization ID');
     }
 
-    // Check if organization exists and is active
-    const organization = await Organization.findById(organizationId);
+    // If this is a tenant subdomain request (subdomainContext resolved an org),
+    // enforce that the token's org matches the subdomain's org.
+    if (req.isPlatform === false) {
+      if (!req.organizationId) {
+        throw new ForbiddenError('No organization context for this request');
+      }
 
-    if (!organization) {
-      throw new ForbiddenError('Organization not found');
+      if (req.organizationId.toString() !== organizationId.toString()) {
+        throw new ForbiddenError(
+          'Organization mismatch between token and subdomain'
+        );
+      }
     }
 
-    if (!organization.isActive) {
-      throw new ForbiddenError(
-        'Organization is inactive. Please contact support.'
-      );
-    }
-
-    // Attach organizationId to request for use in services
-    req.organizationId = organizationId;
+    // Always attach org from JWT for downstream handlers (platform + tenant).
+    req.organizationId = req.organizationId ?? organizationId;
 
     next();
   } catch (error) {
@@ -73,8 +76,8 @@ export const allowOrganizationOverride = (
   next: NextFunction
 ): void => {
   try {
-    // Only Super Admin can use organization override
-    if (req.user?.role !== UserRole.SUPER_ADMIN) {
+    // Only Super Admin on the platform domain can use organization override
+    if (req.user?.role !== UserRole.SUPER_ADMIN || req.isPlatform === false) {
       next();
       return;
     }

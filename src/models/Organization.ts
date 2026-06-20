@@ -18,8 +18,19 @@ export interface LeavePolicy {
   vacationLeave: number;
 }
 
+export enum WeeklyOffPattern {
+  MON_FRI = 'mon_fri',
+  MON_SAT = 'mon_sat',
+  SECOND_FOURTH_SAT = 'second_fourth_sat',
+}
+
+export interface WorkingDaysConfig {
+  weeklyOffPattern: WeeklyOffPattern;
+}
+
 export interface OrganizationSettings {
   workingHours: WorkingHours;
+  workingDays: WorkingDaysConfig;
   leavePolicy: LeavePolicy;
   timezone: string; // e.g., "Asia/Kolkata"
   fiscalYearStart: number; // Month number (1-12)
@@ -34,10 +45,19 @@ export interface MicrosoftAuthConfig {
 
 export interface IOrganization extends Document {
   name: string;
+  orgCode: string;  // 3-char unique code auto-generated from org name e.g. "TRZ"
   subdomain?: string;
   isActive: boolean;
+  /** Set when the organization is soft-deleted (removed from active operations). */
+  deletedAt?: Date;
   subscriptionPlan: SubscriptionPlan;
   subscriptionExpiry?: Date;
+  /** True for sales/prospect sandbox tenants created via demo invitations. */
+  isDemoTenant?: boolean;
+  /** When the demo tenant access ends (org-level lock). */
+  demoExpiresAt?: Date;
+  /** Display label for the prospect company (e.g. "Company A"). */
+  prospectLabel?: string;
   settings: OrganizationSettings;
   microsoftAuth: MicrosoftAuthConfig;
   createdBy?: mongoose.Types.ObjectId;
@@ -58,6 +78,18 @@ const WorkingHoursSchema = new Schema<WorkingHours>(
       required: true,
       default: '18:00',
       match: /^([0-1][0-9]|2[0-3]):[0-5][0-9]$/,
+    },
+  },
+  { _id: false }
+);
+
+const WorkingDaysConfigSchema = new Schema<WorkingDaysConfig>(
+  {
+    weeklyOffPattern: {
+      type: String,
+      enum: Object.values(WeeklyOffPattern),
+      default: WeeklyOffPattern.MON_FRI,
+      required: true,
     },
   },
   { _id: false }
@@ -94,6 +126,11 @@ const OrganizationSettingsSchema = new Schema<OrganizationSettings>(
       required: true,
       default: () => ({ startTime: '09:00', endTime: '18:00' }),
     },
+    workingDays: {
+      type: WorkingDaysConfigSchema,
+      required: true,
+      default: () => ({ weeklyOffPattern: WeeklyOffPattern.MON_FRI }),
+    },
     leavePolicy: {
       type: LeavePolicySchema,
       required: true,
@@ -124,6 +161,15 @@ const OrganizationSchema = new Schema<IOrganization>(
       maxlength: 100,
       index: true,
     },
+    orgCode: {
+      type: String,
+      trim: true,
+      uppercase: true,
+      unique: true,
+      sparse: true,
+      maxlength: 3,
+      match: /^[A-Z0-9]{3}$/,
+    },
     subdomain: {
       type: String,
       trim: true,
@@ -138,6 +184,10 @@ const OrganizationSchema = new Schema<IOrganization>(
       default: true,
       index: true,
     },
+    deletedAt: {
+      type: Date,
+      index: true,
+    },
     subscriptionPlan: {
       type: String,
       enum: Object.values(SubscriptionPlan),
@@ -146,6 +196,18 @@ const OrganizationSchema = new Schema<IOrganization>(
     },
     subscriptionExpiry: {
       type: Date,
+    },
+    isDemoTenant: {
+      type: Boolean,
+      default: false,
+      index: true,
+    },
+    demoExpiresAt: {
+      type: Date,
+    },
+    prospectLabel: {
+      type: String,
+      trim: true,
     },
     settings: {
       type: OrganizationSettingsSchema,

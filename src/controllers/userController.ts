@@ -4,6 +4,7 @@ import emailNotificationService from '../services/emailNotificationService';
 import { ApiResponse } from '../utils/ApiResponse';
 import { BadRequestError, ForbiddenError } from '../utils/AppError';
 import { UserRole } from '../models/User';
+import { resolveOrganizationId } from '../utils/resolveOrganizationId';
 import { logger } from '../utils/logger';
 
 class UserController {
@@ -18,10 +19,16 @@ class UserController {
         throw new BadRequestError('User not authenticated');
       }
 
+      let organizationId = req.organizationId || req.body.organizationId;
+      if (req.body.role !== UserRole.SUPER_ADMIN && !organizationId) {
+        organizationId = await resolveOrganizationId(req);
+      } else if (organizationId && !req.organizationId) {
+        req.organizationId = organizationId;
+      }
+
       const userData: CreateUserData = {
         ...req.body,
-        // Use organizationId from tenant middleware or from body (for Super Admin)
-        organizationId: req.organizationId || req.body.organizationId,
+        organizationId,
       };
 
       // Role-based validation: prevent lower roles from creating higher roles
@@ -45,8 +52,10 @@ class UserController {
           );
         }
         if (userData.role === UserRole.SUPER_ADMIN && userData.organizationId) {
-          // Remove organizationId if creating Super Admin
-          delete userData.organizationId;
+          // Prevent creating platform-level System Admin from organization-scoped flow
+          throw new BadRequestError(
+            'System Admin cannot be created with organization context. Use the system admin creation flow.'
+          );
         }
       }
 
@@ -58,11 +67,14 @@ class UserController {
       });
 
       const user = await userService.createUser(userData, req.user.userId);
+      const inviteRole = (userData.role || user.role) as UserRole;
 
       logger.info('User created, triggering invitation email', {
         userId: user._id,
         email: user.email,
-        role: user.role,
+        requestedRole: userData.role,
+        savedRole: user.role,
+        inviteRole,
         organizationId: user.organizationId?.toString(),
         createdBy: req.user.userId,
       });
@@ -73,7 +85,7 @@ class UserController {
       try {
         await emailNotificationService.sendRoleInvitation({
           email: user.email,
-          role: user.role as UserRole,
+          role: inviteRole,
           organizationId:
             user.organizationId?.toString() ||
             userData.organizationId ||
@@ -133,8 +145,7 @@ class UserController {
       const users = await userService.getAllUsers(
         filters, 
         req.organizationId,
-        req.user.role as UserRole,
-        req.user.userId
+        req.user.role as UserRole
       );
 
       const response: ApiResponse<typeof users> = {
@@ -205,9 +216,17 @@ class UserController {
    */
   async getUserById(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
+      if (!req.user) {
+        throw new BadRequestError('User not authenticated');
+      }
       const { id } = req.params;
 
-      const user = await userService.getUserById(id, req.organizationId);
+      const user = await userService.getUserById(
+        id, 
+        req.organizationId,
+        req.user.role as UserRole,
+        req.user.userId
+      );
 
       const response: ApiResponse<typeof user> = {
         success: true,
@@ -236,8 +255,13 @@ class UserController {
       const { id } = req.params;
       const updates: UpdateUserData = req.body;
 
-      // Pass requester role for permission validation
-      const user = await userService.updateUser(id, updates, req.user.role as UserRole);
+      // Pass requester role and ID for permission validation
+      const user = await userService.updateUser(
+        id, 
+        updates, 
+        req.user.role as UserRole,
+        req.user.userId
+      );
 
       const response: ApiResponse<typeof user> = {
         success: true,
@@ -267,7 +291,10 @@ class UserController {
         throw new BadRequestError('Organization ID is required');
       }
 
-      const result = await userService.getNextEmployeeId(organizationId);
+      const role = (req.query.role as string | undefined) as UserRole | undefined;
+      const department = req.query.department as string | undefined;
+
+      const result = await userService.getNextEmployeeId(organizationId, role, department);
 
       const response: ApiResponse<typeof result> = {
         success: true,
@@ -367,6 +394,8 @@ class UserController {
         role: user.role,
       });
 
+      await userService.resetInvitationForResend(id, req.organizationId);
+
       await emailNotificationService.sendRoleInvitation({
         email: user.email,
         role: user.role as UserRole,
@@ -396,9 +425,18 @@ class UserController {
    */
   async deleteUser(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
+      if (!req.user) {
+        throw new BadRequestError('User not authenticated');
+      }
+
       const { id } = req.params;
 
-      await userService.deleteUser(id, req.organizationId);
+      await userService.deleteUser(
+        id,
+        req.user.userId,
+        req.user.role as UserRole,
+        req.organizationId
+      );
 
       const response: ApiResponse = {
         success: true,
@@ -429,6 +467,44 @@ class UserController {
       };
 
       res.status(200).json(response);
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  async updateUserAttendancePolicy(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const { id } = req.params;
+      const { attendancePolicyId } = req.body;
+      if (!attendancePolicyId) {
+        throw new BadRequestError('attendancePolicyId is required');
+      }
+      const user = await userService.updateUserAttendancePolicy(
+        id,
+        attendancePolicyId,
+        req.organizationId!
+      );
+      res.status(200).json({
+        success: true,
+        message: 'Attendance policy updated',
+        data: user,
+        timestamp: new Date().toISOString(),
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  async updateUserPolicies(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const { id } = req.params;
+      const user = await userService.updateUserPolicies(id, req.organizationId!, req.body);
+      res.status(200).json({
+        success: true,
+        message: 'Policies updated',
+        data: user,
+        timestamp: new Date().toISOString(),
+      });
     } catch (error) {
       next(error);
     }

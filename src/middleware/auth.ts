@@ -1,14 +1,15 @@
 import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
 import config from '../config';
-import { UnauthorizedError } from '../utils/AppError';
+import { ForbiddenError, UnauthorizedError } from '../utils/AppError';
 import { JwtPayload } from '../utils/ApiResponse';
+import User from '../models/User';
 
 /**
  * JWT Authentication Middleware
  * Verifies Bearer token and attaches user to request
  */
-export const authenticate = (req: Request, _res: Response, next: NextFunction): void => {
+export const authenticate = async (req: Request, _res: Response, next: NextFunction): Promise<void> => {
   try {
     const authHeader = req.headers.authorization;
 
@@ -24,6 +25,12 @@ export const authenticate = (req: Request, _res: Response, next: NextFunction): 
 
     const decoded = jwt.verify(token, config.jwtSecret) as JwtPayload;
     req.user = decoded;
+
+    const user = await User.findById(decoded.userId).select('_id isActive');
+    if (!user || !user.isActive) {
+      throw new UnauthorizedError('Account is inactive');
+    }
+
     next();
   } catch (error) {
     if (error instanceof jwt.JsonWebTokenError) {
@@ -48,7 +55,7 @@ export const authorize = (...allowedRoles: string[]) => {
     }
 
     if (!allowedRoles.includes(req.user.role)) {
-      next(new UnauthorizedError('Insufficient permissions'));
+      next(new ForbiddenError('Insufficient permissions'));
       return;
     }
 

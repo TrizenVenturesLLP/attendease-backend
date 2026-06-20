@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import organizationController from '../controllers/organizationController';
 import { authenticate, authorize } from '../middleware/auth';
-import { tenantContext } from '../middleware/tenantContext';
+import { tenantContext, allowOrganizationOverride } from '../middleware/tenantContext';
 import { UserRole } from '../models/User';
 
 const router = Router();
@@ -11,7 +11,8 @@ router.get(
   '/my/settings',
   authenticate,
   tenantContext,
-  authorize(UserRole.ADMIN, UserRole.SUPER_ADMIN),
+  allowOrganizationOverride,
+  authorize(UserRole.ADMIN, UserRole.HR, UserRole.SUPER_ADMIN),
   organizationController.getMyOrganizationSettings
 );
 
@@ -19,7 +20,8 @@ router.put(
   '/my/settings',
   authenticate,
   tenantContext,
-  authorize(UserRole.ADMIN, UserRole.SUPER_ADMIN),
+  allowOrganizationOverride,
+  authorize(UserRole.ADMIN, UserRole.HR, UserRole.SUPER_ADMIN),
   organizationController.updateMyOrganizationSettings
 );
 

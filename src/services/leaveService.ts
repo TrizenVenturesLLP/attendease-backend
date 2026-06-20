@@ -1,444 +1,778 @@
-import Leave, { ILeave, LeaveType, LeaveStatus } from '../models/Leave';
-import LeaveBalance from '../models/LeaveBalance';
+import mongoose from 'mongoose';
+import Leave, { ILeave, LeaveStatus } from '../models/Leave';
+import LeaveBalance, { ILeaveBalance, LeaveBalanceEntry } from '../models/LeaveBalance';
+import LeaveApproval, { LeaveApprovalAction } from '../models/LeaveApproval';
+import LeaveType, { ILeaveType, LeaveTypeStatus } from '../models/LeaveType';
 import Attendance, { AttendanceStatus } from '../models/Attendance';
-import User from '../models/User';
-import { startOfDay, endOfDay, eachDayOfInterval, isWeekend } from 'date-fns';
+import User, { UserRole } from '../models/User';
+import { ILeavePolicy } from '../models/LeavePolicy';
+import { startOfDay, endOfDay, eachDayOfInterval } from 'date-fns';
+import {
+  countOrganizationWorkingDaysInRange,
+  getNonWorkingHolidayDateKeys,
+  getOrganizationWeeklyOffPattern,
+  isOrgWorkingDay,
+} from '../utils/workingDays';
+import { resolveUserLeavePolicy } from '../utils/resolveUserLeavePolicy';
+import {
+  canReviewerActOnLeaveStep,
+  getCurrentWorkflowStep,
+  isLeaveAwaitingApproval,
+  loadWorkflowForLeave,
+  normalizeLeaveStatus,
+  resolveRefId,
+} from '../utils/leaveWorkflowUtils';
+import { leavePolicyService } from './leavePolicyService';
+import { leaveMinioStorage } from '../utils/storage/MinIOStorage';
+import { ForbiddenError, NotFoundError } from '../utils/AppError';
+
+const LEAVE_ATTACHMENT_MAX_BYTES = 5 * 1024 * 1024;
 
 export class LeaveService {
-  /**
-   * Calculate working days between two dates (exclude weekends)
-   */
-  private calculateWorkingDays(startDate: Date, endDate: Date): number {
-    const days = eachDayOfInterval({ start: startDate, end: endDate });
-    const workingDays = days.filter((day) => !isWeekend(day));
-    return workingDays.length;
+  private async getUserContext(userId: string) {
+    const user = await User.findById(userId).lean();
+    if (!user?.organizationId) {
+      throw new Error('User not found');
+    }
+    return user;
   }
 
-  /**
-   * Get or create leave balance for user/year
-   */
-  private async getOrCreateLeaveBalance(userId: string, year: number, organizationId: string) {
-    let balance = await LeaveBalance.findOne({ userId, year, organizationId });
+  private findRuleForType(policy: ILeavePolicy, leaveTypeId: string) {
+    return policy.leaveRules.find((rule) => rule.leaveTypeId.toString() === leaveTypeId);
+  }
 
+  private syncBalanceFromPolicy(
+    balance: ILeaveBalance,
+    policy: ILeavePolicy
+  ): void {
+    const existing = new Map(
+      balance.balances.map((entry) => [entry.leaveTypeId.toString(), entry])
+    );
+
+    balance.balances = policy.leaveRules.map((rule) => {
+      const typeId = rule.leaveTypeId.toString();
+      const prev = existing.get(typeId);
+      const used = prev?.used ?? 0;
+      const allocated = rule.annualAllocation;
+      return {
+        leaveTypeId: rule.leaveTypeId,
+        allocated,
+        used,
+        remaining: Math.max(0, allocated - used),
+      };
+    });
+  }
+
+  private async getOrCreateLeaveBalance(
+    userId: string,
+    year: number,
+    organizationId: string
+  ): Promise<ILeaveBalance> {
+    const user = await this.getUserContext(userId);
+    let policy = await resolveUserLeavePolicy(user);
+    if (!policy) {
+      policy = await leavePolicyService.ensureDefaultPolicyForOrg(organizationId);
+    }
+
+    let balance = await LeaveBalance.findOne({ userId, year, organizationId });
     if (!balance) {
-      // Create initial balance with default allocations
+      const entries: LeaveBalanceEntry[] = policy.leaveRules.map((rule) => ({
+        leaveTypeId: rule.leaveTypeId,
+        allocated: rule.annualAllocation,
+        used: 0,
+        remaining: rule.annualAllocation,
+      }));
       balance = await LeaveBalance.create({
         userId,
         year,
         organizationId,
-        sickLeave: { total: 10, used: 0, remaining: 10 },
-        casualLeave: { total: 12, used: 0, remaining: 12 },
-        vacationLeave: { total: 15, used: 0, remaining: 15 },
-        unpaidLeave: { used: 0 },
+        balances: entries,
       });
+      return balance;
     }
 
+    this.syncBalanceFromPolicy(balance, policy);
+    await balance.save();
     return balance;
   }
 
-  /**
-   * Check if user has sufficient leave balance
-   */
+  private getBalanceEntry(balance: ILeaveBalance, leaveTypeId: string) {
+    return balance.balances.find((entry) => entry.leaveTypeId.toString() === leaveTypeId);
+  }
+
   private checkBalance(
-    balance: any,
-    leaveType: LeaveType,
+    balance: ILeaveBalance,
+    leaveType: ILeaveType,
+    policy: ILeavePolicy,
     days: number
   ): boolean {
-    if (leaveType === LeaveType.UNPAID) {
-      return true; // Unpaid leave has no limit
-    }
+    if (!leaveType.isPaid) return true;
+    const rule = this.findRuleForType(policy, leaveType._id.toString());
+    if (!rule) return false;
 
-    const typeKey = `${leaveType}Leave` as keyof typeof balance;
-    const leaveBalance = balance[typeKey];
-    return leaveBalance && leaveBalance.remaining >= days;
+    const entry = this.getBalanceEntry(balance, leaveType._id.toString());
+    if (!entry) return false;
+    if (rule.allowNegativeBalance) return true;
+    return entry.remaining >= days;
   }
 
-  /**
-   * Request leave
-   */
-  async requestLeave(
-    userId: string,
-    organizationId: string,
-    leaveType: LeaveType,
-    startDate: Date,
-    endDate: Date,
-    reason: string
-  ): Promise<ILeave> {
-    // Normalize dates to start of day
-    const start = startOfDay(startDate);
-    const end = startOfDay(endDate);
-
-    // Validate dates
-    if (end < start) {
-      throw new Error('End date must be greater than or equal to start date');
+  private deductBalance(
+    balance: ILeaveBalance,
+    leaveType: ILeaveType,
+    days: number
+  ): void {
+    const entry = this.getBalanceEntry(balance, leaveType._id.toString());
+    if (!entry) {
+      balance.balances.push({
+        leaveTypeId: leaveType._id,
+        allocated: 0,
+        used: days,
+        remaining: 0,
+      });
+      return;
     }
+    entry.used += days;
+    entry.remaining = Math.max(0, entry.allocated - entry.used);
+  }
 
-    // Calculate working days
-    const totalDays = this.calculateWorkingDays(start, end);
-
-    if (totalDays === 0) {
-      throw new Error('Leave request must include at least one working day');
-    }
-
-    // Check for overlapping leaves
-    const overlapping = await Leave.findOne({
-      userId,
+  private async markAttendanceOnLeave(leave: ILeave): Promise<void> {
+    const organizationId = leave.organizationId.toString();
+    const weeklyOffPattern = await getOrganizationWeeklyOffPattern(organizationId);
+    const holidayDateKeys = await getNonWorkingHolidayDateKeys(
       organizationId,
-      status: { $in: [LeaveStatus.PENDING, LeaveStatus.APPROVED] },
-      $or: [
-        { startDate: { $lte: end }, endDate: { $gte: start } },
-      ],
-    });
-
-    if (overlapping) {
-      throw new Error('You already have a leave request for these dates');
-    }
-
-    // Check leave balance
-    const year = start.getFullYear();
-    const balance = await this.getOrCreateLeaveBalance(userId, year, organizationId);
-
-    if (!this.checkBalance(balance, leaveType, totalDays)) {
-      throw new Error(`Insufficient ${leaveType} leave balance`);
-    }
-
-    // Create leave request
-    const leave = await Leave.create({
-      userId,
-      organizationId,
-      leaveType,
-      startDate: start,
-      endDate: end,
-      totalDays,
-      reason,
-      status: LeaveStatus.PENDING,
-    });
-
-    return leave;
-  }
-
-  /**
-   * Get user's leave history
-   */
-  async getMyLeaves(
-    userId: string,
-    organizationId: string,
-    filters?: {
-      status?: LeaveStatus;
-      startDate?: Date;
-      endDate?: Date;
-    },
-    page: number = 1,
-    limit: number = 20
-  ): Promise<any> {
-    const query: any = { userId, organizationId };
-
-    if (filters?.status) {
-      query.status = filters.status;
-    }
-
-    if (filters?.startDate || filters?.endDate) {
-      query.startDate = {};
-      if (filters.startDate) query.startDate.$gte = startOfDay(filters.startDate);
-      if (filters.endDate) query.startDate.$lte = endOfDay(filters.endDate);
-    }
-
-    const skip = (page - 1) * limit;
-
-    const [records, total] = await Promise.all([
-      Leave.find(query)
-        .populate('reviewedBy', 'firstName lastName')
-        .sort({ createdAt: -1 })
-        .skip(skip)
-        .limit(limit)
-        .lean(),
-      Leave.countDocuments(query),
-    ]);
-
-    return {
-      records,
-      pagination: {
-        total,
-        page,
-        limit,
-        totalPages: Math.ceil(total / limit),
-      },
-    };
-  }
-
-  /**
-   * Get user's leave balance
-   */
-  async getMyBalance(userId: string, organizationId: string, year?: number): Promise<any> {
-    const targetYear = year || new Date().getFullYear();
-    // This will auto-create if doesn't exist
-    const balance = await this.getOrCreateLeaveBalance(userId, targetYear, organizationId);
-    return balance;
-  }
-
-  /**
-   * Get pending leaves for approval (Supervisor/HR/Admin)
-   */
-  async getPendingLeaves(
-    userId: string,
-    organizationId: string,
-    userRole: string,
-    page: number = 1,
-    limit: number = 20
-  ): Promise<any> {
-    const query: any = { organizationId, status: LeaveStatus.PENDING };
-
-    // If supervisor, only show team members' leaves
-    if (userRole === 'supervisor') {
-      const teamMembers = await User.find({ supervisorId: userId }).select('_id');
-      const teamMemberIds = teamMembers.map((u) => u._id);
-      query.userId = { $in: teamMemberIds };
-    }
-    // HR/Admin/Super Admin can see all pending leaves
-
-    const skip = (page - 1) * limit;
-
-    const [records, total] = await Promise.all([
-      Leave.find(query)
-        .populate('userId', 'firstName lastName email employeeId department')
-        .sort({ createdAt: 1 }) // Oldest first
-        .skip(skip)
-        .limit(limit)
-        .lean(),
-      Leave.countDocuments(query),
-    ]);
-
-    return {
-      records,
-      pagination: {
-        total,
-        page,
-        limit,
-        totalPages: Math.ceil(total / limit),
-      },
-    };
-  }
-
-  /**
-   * Get all leaves with filters (HR/Admin)
-   */
-  async getAllLeaves(
-    organizationId: string,
-    filters?: {
-      userId?: string;
-      status?: LeaveStatus;
-      leaveType?: LeaveType;
-      startDate?: Date;
-      endDate?: Date;
-    },
-    page: number = 1,
-    limit: number = 50
-  ): Promise<any> {
-    const query: any = { organizationId };
-
-    if (filters?.userId) query.userId = filters.userId;
-    if (filters?.status) query.status = filters.status;
-    if (filters?.leaveType) query.leaveType = filters.leaveType;
-
-    if (filters?.startDate || filters?.endDate) {
-      query.startDate = {};
-      if (filters.startDate) query.startDate.$gte = startOfDay(filters.startDate);
-      if (filters.endDate) query.startDate.$lte = endOfDay(filters.endDate);
-    }
-
-    const skip = (page - 1) * limit;
-
-    const [records, total] = await Promise.all([
-      Leave.find(query)
-        .populate('userId', 'firstName lastName email employeeId department')
-        .populate('reviewedBy', 'firstName lastName')
-        .sort({ createdAt: -1 })
-        .skip(skip)
-        .limit(limit)
-        .lean(),
-      Leave.countDocuments(query),
-    ]);
-
-    return {
-      records,
-      pagination: {
-        total,
-        page,
-        limit,
-        totalPages: Math.ceil(total / limit),
-      },
-    };
-  }
-
-  /**
-   * Get leaves for calendar view
-   */
-  async getCalendarLeaves(
-    organizationId: string,
-    month: number,
-    year: number,
-    userId?: string,
-    supervisorId?: string
-  ): Promise<any> {
-    const startDate = new Date(year, month - 1, 1);
-    const endDate = new Date(year, month, 0);
-
-    const query: any = {
-      organizationId,
-      status: LeaveStatus.APPROVED,
-      $or: [
-        { startDate: { $lte: endDate }, endDate: { $gte: startDate } },
-      ],
-    };
-
-    if (userId) {
-      query.userId = userId;
-    } else if (supervisorId) {
-      // Get team members
-      const teamMembers = await User.find({ supervisorId }).select('_id');
-      const teamMemberIds = teamMembers.map((u) => u._id);
-      query.userId = { $in: teamMemberIds };
-    }
-
-    const leaves = await Leave.find(query)
-      .populate('userId', 'firstName lastName employeeId')
-      .lean();
-
-    return leaves;
-  }
-
-  /**
-   * Approve leave
-   */
-  async approveLeave(
-    leaveId: string,
-    reviewerId: string,
-    notes?: string
-  ): Promise<ILeave> {
-    const leave = await Leave.findById(leaveId);
-
-    if (!leave) {
-      throw new Error('Leave request not found');
-    }
-
-    if (leave.status !== LeaveStatus.PENDING) {
-      throw new Error('Leave request is not pending');
-    }
-
-    // Update leave balance
-    const year = leave.startDate.getFullYear();
-    const balance = await this.getOrCreateLeaveBalance(
-      leave.userId.toString(),
-      year,
-      leave.organizationId.toString()
+      leave.startDate,
+      leave.endDate
     );
-    
-    if (leave.leaveType === LeaveType.UNPAID) {
-      balance.unpaidLeave.used += leave.totalDays;
-    } else if (leave.leaveType === LeaveType.SICK) {
-      balance.sickLeave.used += leave.totalDays;
-      balance.sickLeave.remaining = balance.sickLeave.total - balance.sickLeave.used;
-    } else if (leave.leaveType === LeaveType.CASUAL) {
-      balance.casualLeave.used += leave.totalDays;
-      balance.casualLeave.remaining = balance.casualLeave.total - balance.casualLeave.used;
-    } else if (leave.leaveType === LeaveType.VACATION) {
-      balance.vacationLeave.used += leave.totalDays;
-      balance.vacationLeave.remaining = balance.vacationLeave.total - balance.vacationLeave.used;
-    }
 
-    await balance.save();
-
-    // Mark attendance as ON_LEAVE for the leave period
     const leaveDays = eachDayOfInterval({
       start: leave.startDate,
       end: leave.endDate,
-    }).filter((day) => !isWeekend(day));
+    }).filter((day) => isOrgWorkingDay(day, weeklyOffPattern, holidayDateKeys));
 
     for (const day of leaveDays) {
       const dayStart = startOfDay(day);
-      
-      // Check if attendance record exists
       const existingAttendance = await Attendance.findOne({
         userId: leave.userId,
+        organizationId,
         date: dayStart,
       });
 
       if (existingAttendance) {
-        // Update existing record
         existingAttendance.status = AttendanceStatus.ON_LEAVE;
         await existingAttendance.save();
       } else {
-        // Create new attendance record
         await Attendance.create({
           userId: leave.userId,
+          organizationId,
           date: dayStart,
           status: AttendanceStatus.ON_LEAVE,
           isApproved: true,
         });
       }
     }
+  }
 
-    // Update leave status
-    leave.status = LeaveStatus.APPROVED;
-    leave.reviewedBy = reviewerId as any;
-    leave.reviewedAt = new Date();
-    leave.reviewNotes = notes;
+  private async uploadLeaveAttachment(
+    userId: string,
+    organizationId: string,
+    fileData: string
+  ): Promise<string> {
+    const trimmed = fileData.trim();
+    const base64Data = trimmed.replace(/^data:[^;]+;base64,/, '');
+    if (!base64Data) {
+      throw new Error('Invalid attachment data');
+    }
 
-    await leave.save();
+    const buffer = Buffer.from(base64Data, 'base64');
+    if (buffer.length > LEAVE_ATTACHMENT_MAX_BYTES) {
+      throw new Error('Attachment must be under 5MB');
+    }
+
+    const mimeMatch = trimmed.match(/^data:([^;]+);base64,/);
+    const contentType = mimeMatch?.[1] || 'image/jpeg';
+    const extMap: Record<string, string> = {
+      'application/pdf': 'pdf',
+      'image/jpeg': 'jpg',
+      'image/png': 'png',
+      'image/webp': 'webp',
+      'application/msword': 'doc',
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'docx',
+      'text/plain': 'txt',
+    };
+    const ext = extMap[contentType] || contentType.split('/')[1]?.replace(/[^a-z0-9]/gi, '') || 'bin';
+    const folder = `org-${organizationId}/users/${userId}/leave-attachments`;
+    const fileName = `leave_${Date.now()}.${ext.replace(/[^a-z0-9]/gi, '')}`;
+
+    const result = await leaveMinioStorage.uploadFile(
+      buffer,
+      fileName,
+      contentType,
+      folder,
+      { userId, type: 'leave-attachment' }
+    );
+
+    return result.key;
+  }
+
+  private resolveAttachmentKey(attachmentRef: string): string {
+    const trimmed = attachmentRef.trim();
+    if (!trimmed.includes('://')) return trimmed;
+
+    try {
+      const url = new URL(trimmed);
+      const path = url.pathname.replace(/^\/+/, '');
+      const bucket =
+        process.env.MINIO_LEAVE_BUCKET_NAME || 'leave-attachments';
+      if (path.startsWith(`${bucket}/`)) {
+        return path.slice(bucket.length + 1);
+      }
+      const segments = path.split('/');
+      if (segments[0] === bucket) {
+        return segments.slice(1).join('/');
+      }
+      return path;
+    } catch {
+      return trimmed;
+    }
+  }
+
+  async getLeaveAttachmentBuffer(
+    leaveId: string,
+    requesterId: string,
+    requesterRole: string,
+    organizationId: string
+  ): Promise<{ buffer: Buffer; contentType: string }> {
+    const leave = await Leave.findOne({ _id: leaveId, organizationId }).lean();
+    if (!leave) {
+      throw new NotFoundError('Leave request not found');
+    }
+    if (!leave.attachmentUrl?.trim()) {
+      throw new NotFoundError('No attachment found for this leave request');
+    }
+
+    const isOwner = resolveRefId(leave.userId) === requesterId;
+    const isHrOrAdmin = [UserRole.HR, UserRole.ADMIN, UserRole.SUPER_ADMIN].includes(
+      requesterRole as UserRole
+    );
+
+    let canView = isOwner || isHrOrAdmin;
+    if (!canView && requesterRole === UserRole.SUPERVISOR) {
+      const employee = await User.findById(leave.userId).select('supervisorId').lean();
+      canView = resolveRefId(employee?.supervisorId) === requesterId;
+    }
+
+    if (!canView) {
+      throw new ForbiddenError('You are not authorized to view this attachment');
+    }
+
+    const key = this.resolveAttachmentKey(leave.attachmentUrl);
+    return leaveMinioStorage.getObjectBuffer(key);
+  }
+
+  private leavePopulateQuery() {
+    return [
+      { path: 'leaveTypeId', select: 'name code isPaid isOther requiresDocument' },
+      { path: 'leavePolicyId', select: 'policyName' },
+      { path: 'workflowId', select: 'workflowName steps' },
+      { path: 'userId', select: 'firstName lastName email employeeId department' },
+    ];
+  }
+
+  async requestLeave(
+    userId: string,
+    organizationId: string,
+    leaveTypeId: string,
+    startDate: Date,
+    endDate: Date,
+    reason: string,
+    options?: {
+      isHalfDay?: boolean;
+      attachmentUrl?: string;
+      attachmentData?: string;
+      otherLeaveTypeName?: string;
+    }
+  ): Promise<ILeave> {
+    const user = await this.getUserContext(userId);
+    const leaveType = await LeaveType.findOne({
+      _id: leaveTypeId,
+      organizationId,
+      status: LeaveTypeStatus.ACTIVE,
+    });
+    if (!leaveType) {
+      throw new Error('Active leave type not found');
+    }
+
+    if (leaveType.isOther) {
+      if (!options?.otherLeaveTypeName?.trim()) {
+        throw new Error('Please specify the leave type name for Other');
+      }
+    }
+
+    let policy = await resolveUserLeavePolicy(user);
+    if (!policy) {
+      policy = await leavePolicyService.ensureDefaultPolicyForOrg(organizationId);
+    }
+
+    const rule = this.findRuleForType(policy, leaveTypeId);
+    if (!rule) {
+      throw new Error('Selected leave type is not allowed under your leave policy');
+    }
+
+    if (options?.isHalfDay && !leaveType.allowHalfDay) {
+      throw new Error('Half-day leave is not allowed for this leave type');
+    }
+
+    if (leaveType.requiresDocument && !options?.attachmentData?.trim() && !options?.attachmentUrl?.trim()) {
+      throw new Error(`A supporting document is required for ${leaveType.name}`);
+    }
+
+    const start = startOfDay(startDate);
+    const end = startOfDay(endDate);
+    if (end < start) {
+      throw new Error('End date must be greater than or equal to start date');
+    }
+
+    let totalDays = await countOrganizationWorkingDaysInRange(organizationId, start, end);
+    if (totalDays === 0) {
+      throw new Error('Leave request must include at least one working day');
+    }
+    if (options?.isHalfDay) {
+      totalDays = 0.5;
+    }
+
+    const overlapping = await Leave.findOne({
+      userId,
+      organizationId,
+      status: { $in: [LeaveStatus.PENDING, LeaveStatus.PARTIALLY_APPROVED, LeaveStatus.APPROVED] },
+      $or: [{ startDate: { $lte: end }, endDate: { $gte: start } }],
+    });
+    if (overlapping) {
+      throw new Error('You already have a leave request for these dates');
+    }
+
+    const year = start.getFullYear();
+    const balance = await this.getOrCreateLeaveBalance(userId, year, organizationId);
+    if (!this.checkBalance(balance, leaveType, policy, totalDays)) {
+      throw new Error(`Insufficient ${leaveType.name} balance`);
+    }
+
+    const workflowId = resolveRefId(policy.workflowId);
+    if (!workflowId) {
+      throw new Error('Leave policy has no approval workflow configured');
+    }
+
+    let attachmentUrl = options?.attachmentUrl?.trim();
+    if (options?.attachmentData?.trim()) {
+      attachmentUrl = await this.uploadLeaveAttachment(
+        userId,
+        organizationId,
+        options.attachmentData.trim()
+      );
+    }
+
+    const leave = await Leave.create({
+      userId,
+      organizationId,
+      leaveTypeId: leaveType._id,
+      leavePolicyId: policy._id,
+      otherLeaveTypeName: leaveType.isOther ? options?.otherLeaveTypeName?.trim() : undefined,
+      startDate: start,
+      endDate: end,
+      totalDays,
+      isHalfDay: Boolean(options?.isHalfDay),
+      reason: reason.trim(),
+      attachmentUrl,
+      workflowId,
+      currentApprovalStep: 1,
+      status: LeaveStatus.PENDING,
+    });
 
     return leave;
   }
 
-  /**
-   * Reject leave
-   */
-  async rejectLeave(
-    leaveId: string,
+  async getMyLeaves(
+    userId: string,
+    organizationId: string,
+    filters?: { status?: string; startDate?: Date; endDate?: Date },
+    page = 1,
+    limit = 20
+  ) {
+    const query: Record<string, unknown> = { userId, organizationId };
+    const normalizedStatus = normalizeLeaveStatus(filters?.status);
+    if (normalizedStatus) query.status = normalizedStatus;
+
+    if (filters?.startDate || filters?.endDate) {
+      query.startDate = {};
+      if (filters.startDate) (query.startDate as any).$gte = startOfDay(filters.startDate);
+      if (filters.endDate) (query.startDate as any).$lte = endOfDay(filters.endDate);
+    }
+
+    const skip = (page - 1) * limit;
+    const [records, total] = await Promise.all([
+      Leave.find(query)
+        .populate(this.leavePopulateQuery())
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .lean(),
+      Leave.countDocuments(query),
+    ]);
+
+    return { records, pagination: { total, page, limit, totalPages: Math.ceil(total / limit) } };
+  }
+
+  async getMyBalance(userId: string, organizationId: string, year?: number) {
+    const targetYear = year || new Date().getFullYear();
+    const balance = await this.getOrCreateLeaveBalance(userId, targetYear, organizationId);
+    const populated = await LeaveBalance.findById(balance._id)
+      .populate('balances.leaveTypeId', 'name code isPaid isOther allowHalfDay requiresDocument')
+      .lean();
+    return populated;
+  }
+
+  async previewLeaveDays(
+    organizationId: string,
+    startDate: Date,
+    endDate: Date,
+    isHalfDay = false
+  ): Promise<{ workingDays: number; totalLeaveDays: number; includesOnlyNonWorkingDays: boolean }> {
+    const start = startOfDay(startDate);
+    const end = startOfDay(endDate);
+
+    if (end < start) {
+      return { workingDays: 0, totalLeaveDays: 0, includesOnlyNonWorkingDays: true };
+    }
+
+    const workingDays = await countOrganizationWorkingDaysInRange(organizationId, start, end);
+    let totalLeaveDays = workingDays;
+    if (isHalfDay && workingDays > 0) {
+      totalLeaveDays = 0.5;
+    }
+
+    return {
+      workingDays,
+      totalLeaveDays,
+      includesOnlyNonWorkingDays: workingDays === 0,
+    };
+  }
+
+  private async filterLeavesForReviewer(
+    leaves: ILeave[],
     reviewerId: string,
-    notes: string
-  ): Promise<ILeave> {
+    reviewerRole: string
+  ): Promise<ILeave[]> {
+    const eligible: ILeave[] = [];
+    for (const leave of leaves) {
+      const workflow = await loadWorkflowForLeave(
+        leave.workflowId,
+        leave.organizationId
+      );
+      if (!workflow) continue;
+      const canAct = await canReviewerActOnLeaveStep(leave, reviewerId, reviewerRole, workflow);
+      if (canAct) eligible.push(leave);
+    }
+    return eligible;
+  }
+
+  async getPendingLeaves(
+    userId: string,
+    organizationId: string,
+    userRole: string,
+    page = 1,
+    limit = 20
+  ) {
+    const query: Record<string, unknown> = {
+      organizationId,
+      status: { $in: [LeaveStatus.PENDING, LeaveStatus.PARTIALLY_APPROVED] },
+    };
+
+    if (userRole === UserRole.SUPERVISOR) {
+      const teamMembers = await User.find({ supervisorId: userId, organizationId }).select('_id');
+      query.userId = { $in: teamMembers.map((u) => u._id) };
+    }
+
+    const allPending = await Leave.find(query)
+      .populate(this.leavePopulateQuery())
+      .sort({ createdAt: 1 })
+      .lean();
+
+    const filtered = await this.filterLeavesForReviewer(
+      allPending as ILeave[],
+      userId,
+      userRole
+    );
+
+    const skip = (page - 1) * limit;
+    const records = filtered.slice(skip, skip + limit);
+
+    return {
+      records,
+      pagination: {
+        total: filtered.length,
+        page,
+        limit,
+        totalPages: Math.ceil(filtered.length / limit) || 1,
+      },
+    };
+  }
+
+  async getAllLeaves(
+    organizationId: string,
+    filters?: {
+      userId?: string;
+      status?: string;
+      leaveTypeId?: string;
+      startDate?: Date;
+      endDate?: Date;
+    },
+    page = 1,
+    limit = 50
+  ) {
+    const query: Record<string, unknown> = { organizationId };
+    if (filters?.userId) query.userId = filters.userId;
+    const normalizedStatus = normalizeLeaveStatus(filters?.status);
+    if (normalizedStatus) query.status = normalizedStatus;
+    if (filters?.leaveTypeId) query.leaveTypeId = filters.leaveTypeId;
+
+    if (filters?.startDate || filters?.endDate) {
+      query.startDate = {};
+      if (filters.startDate) (query.startDate as any).$gte = startOfDay(filters.startDate);
+      if (filters.endDate) (query.startDate as any).$lte = endOfDay(filters.endDate);
+    }
+
+    const skip = (page - 1) * limit;
+    const [records, total] = await Promise.all([
+      Leave.find(query)
+        .populate(this.leavePopulateQuery())
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .lean(),
+      Leave.countDocuments(query),
+    ]);
+
+    return { records, pagination: { total, page, limit, totalPages: Math.ceil(total / limit) } };
+  }
+
+  async getTeamLeaves(
+    organizationId: string,
+    requesterRole: string,
+    requesterUserId: string,
+    filters?: {
+      userId?: string;
+      status?: string;
+      leaveTypeId?: string;
+      startDate?: Date;
+      endDate?: Date;
+    },
+    page = 1,
+    limit = 50
+  ) {
+    const query: Record<string, unknown> = { organizationId };
+    const normalizedStatus = normalizeLeaveStatus(filters?.status);
+    if (normalizedStatus) query.status = normalizedStatus;
+    if (filters?.leaveTypeId) query.leaveTypeId = filters.leaveTypeId;
+
+    if (filters?.startDate || filters?.endDate) {
+      query.startDate = {};
+      if (filters.startDate) (query.startDate as any).$gte = startOfDay(filters.startDate);
+      if (filters.endDate) (query.startDate as any).$lte = endOfDay(filters.endDate);
+    }
+
+    if (requesterRole === UserRole.SUPERVISOR) {
+      const teamMembers = await User.find({ supervisorId: requesterUserId, organizationId }).select('_id');
+      query.userId = { $in: teamMembers.map((u) => u._id) };
+    } else if (filters?.userId) {
+      query.userId = filters.userId;
+    }
+
+    const skip = (page - 1) * limit;
+    const [records, total] = await Promise.all([
+      Leave.find(query)
+        .populate(this.leavePopulateQuery())
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .lean(),
+      Leave.countDocuments(query),
+    ]);
+
+    return { records, pagination: { total, page, limit, totalPages: Math.ceil(total / limit) } };
+  }
+
+  async getCalendarLeaves(
+    organizationId: string,
+    month: number,
+    year: number,
+    userId?: string,
+    supervisorId?: string
+  ) {
+    const startDate = new Date(year, month - 1, 1);
+    const endDate = new Date(year, month, 0);
+
+    const query: Record<string, unknown> = {
+      organizationId,
+      status: LeaveStatus.APPROVED,
+      $or: [{ startDate: { $lte: endDate }, endDate: { $gte: startDate } }],
+    };
+
+    if (userId) {
+      query.userId = userId;
+    } else if (supervisorId) {
+      const teamMembers = await User.find({ supervisorId }).select('_id');
+      query.userId = { $in: teamMembers.map((u) => u._id) };
+    }
+
+    return Leave.find(query)
+      .populate('userId', 'firstName lastName employeeId')
+      .populate('leaveTypeId', 'name code')
+      .lean();
+  }
+
+  async getLeaveApprovals(leaveId: string) {
+    return LeaveApproval.find({ leaveId })
+      .populate('approverId', 'firstName lastName email role')
+      .sort({ workflowStep: 1, createdAt: 1 })
+      .lean();
+  }
+
+  async approveLeave(leaveId: string, reviewerId: string, reviewerRole: string, notes?: string) {
     const leave = await Leave.findById(leaveId);
-
-    if (!leave) {
-      throw new Error('Leave request not found');
+    if (!leave) throw new Error('Leave request not found');
+    if (!isLeaveAwaitingApproval(leave.status)) {
+      throw new Error('Leave request is not awaiting approval');
     }
 
-    if (leave.status !== LeaveStatus.PENDING) {
-      throw new Error('Leave request is not pending');
+    const workflow = await loadWorkflowForLeave(leave.workflowId, leave.organizationId);
+    if (!workflow) throw new Error('Approval workflow not found');
+
+    const canAct = await canReviewerActOnLeaveStep(leave, reviewerId, reviewerRole, workflow);
+    if (!canAct) {
+      throw new Error('You are not authorized to approve this leave at the current step');
     }
+
+    const currentStep = getCurrentWorkflowStep(workflow, leave.currentApprovalStep);
+    if (!currentStep) throw new Error('Invalid approval workflow step');
+
+    await LeaveApproval.create({
+      leaveId: leave._id,
+      workflowStep: leave.currentApprovalStep,
+      approverId: new mongoose.Types.ObjectId(reviewerId),
+      action: LeaveApprovalAction.APPROVED,
+      comments: notes?.trim(),
+    });
+
+    const nextStep = workflow.steps.find((step) => step.order === leave.currentApprovalStep + 1);
+    if (nextStep) {
+      leave.status = LeaveStatus.PARTIALLY_APPROVED;
+      leave.currentApprovalStep += 1;
+      await leave.save();
+      return leave;
+    }
+
+    const leaveType = await LeaveType.findById(leave.leaveTypeId);
+    if (!leaveType) throw new Error('Leave type not found');
+
+    const year = leave.startDate.getFullYear();
+    const balance = await this.getOrCreateLeaveBalance(
+      leave.userId.toString(),
+      year,
+      leave.organizationId.toString()
+    );
+
+    const user = await this.getUserContext(leave.userId.toString());
+    let policy = await resolveUserLeavePolicy(user);
+    if (!policy && leave.leavePolicyId) {
+      policy = await leavePolicyService.getById(
+        leave.leavePolicyId.toString(),
+        leave.organizationId.toString()
+      );
+    }
+    if (!policy) {
+      policy = await leavePolicyService.ensureDefaultPolicyForOrg(leave.organizationId.toString());
+    }
+
+    if (
+      leaveType.isPaid &&
+      !this.checkBalance(balance, leaveType, policy, leave.totalDays)
+    ) {
+      throw new Error(`Insufficient ${leaveType.name} leave balance`);
+    }
+
+    this.deductBalance(balance, leaveType, leave.totalDays);
+    await balance.save();
+    await this.markAttendanceOnLeave(leave);
+
+    leave.status = LeaveStatus.APPROVED;
+    await leave.save();
+    return leave;
+  }
+
+  async rejectLeave(leaveId: string, reviewerId: string, reviewerRole: string, notes: string) {
+    const leave = await Leave.findById(leaveId);
+    if (!leave) throw new Error('Leave request not found');
+    if (!isLeaveAwaitingApproval(leave.status)) {
+      throw new Error('Leave request is not awaiting approval');
+    }
+
+    const workflow = await loadWorkflowForLeave(leave.workflowId, leave.organizationId);
+    if (!workflow) throw new Error('Approval workflow not found');
+
+    const canAct = await canReviewerActOnLeaveStep(leave, reviewerId, reviewerRole, workflow);
+    if (!canAct) {
+      throw new Error('You are not authorized to reject this leave at the current step');
+    }
+
+    await LeaveApproval.create({
+      leaveId: leave._id,
+      workflowStep: leave.currentApprovalStep,
+      approverId: new mongoose.Types.ObjectId(reviewerId),
+      action: LeaveApprovalAction.REJECTED,
+      comments: notes.trim(),
+    });
 
     leave.status = LeaveStatus.REJECTED;
-    leave.reviewedBy = reviewerId as any;
-    leave.reviewedAt = new Date();
-    leave.reviewNotes = notes;
-
     await leave.save();
-
     return leave;
   }
 
-  /**
-   * Cancel leave (by employee)
-   */
-  async cancelLeave(leaveId: string, userId: string): Promise<ILeave> {
+  async cancelLeave(leaveId: string, userId: string) {
     const leave = await Leave.findOne({ _id: leaveId, userId });
-
-    if (!leave) {
-      throw new Error('Leave request not found');
-    }
-
+    if (!leave) throw new Error('Leave request not found');
     if (leave.status === LeaveStatus.APPROVED) {
       throw new Error('Cannot cancel approved leave. Please contact HR.');
     }
-
-    if (leave.status !== LeaveStatus.PENDING) {
+    if (!isLeaveAwaitingApproval(leave.status)) {
       throw new Error('Leave request cannot be cancelled');
     }
 
     leave.status = LeaveStatus.CANCELLED;
     await leave.save();
-
     return leave;
+  }
+
+  async adjustBalance(
+    organizationId: string,
+    employeeId: string,
+    year: number,
+    leaveTypeId: string,
+    allocated: number
+  ) {
+    const balance = await this.getOrCreateLeaveBalance(employeeId, year, organizationId);
+    const entry = this.getBalanceEntry(balance, leaveTypeId);
+    if (!entry) {
+      balance.balances.push({
+        leaveTypeId: new mongoose.Types.ObjectId(leaveTypeId),
+        allocated,
+        used: 0,
+        remaining: allocated,
+      });
+    } else {
+      entry.allocated = allocated;
+      entry.remaining = Math.max(0, allocated - entry.used);
+    }
+    await balance.save();
+    return balance;
   }
 }
 

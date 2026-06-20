@@ -60,7 +60,7 @@ router.post(
  */
 router.get(
   '/',
-  authorize(UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.HR),
+  authorize(UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.HR, UserRole.SUPERVISOR),
   userController.getAllUsers
 );
 
@@ -113,6 +113,18 @@ router.patch(
   '/:id/supervisor',
   authorize(UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.HR),
   userController.assignSupervisor
+);
+
+router.patch(
+  '/:id/attendance-policy',
+  authorize(UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.HR),
+  userController.updateUserAttendancePolicy
+);
+
+router.patch(
+  '/:id/policies',
+  authorize(UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.HR),
+  userController.updateUserPolicies
 );
 
 /**

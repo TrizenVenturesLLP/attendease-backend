@@ -10,7 +10,11 @@ import {
   ConflictError,
 } from '../utils/AppError';
 import mongoose from 'mongoose';
-import { startOfMonth, endOfMonth, eachDayOfInterval, isWeekend } from 'date-fns';
+import { startOfMonth, endOfMonth } from 'date-fns';
+import {
+  countOrganizationWorkingDaysInMonth,
+  countOrganizationWorkingDaysInPeriod,
+} from '../utils/workingDays';
 
 export interface CreateSalaryStructureData {
   userId: string;
@@ -29,33 +33,14 @@ export interface UpdateSalaryStructureData {
 
 class PayrollService {
   /**
-   * Calculate working days in a month (excluding weekends AND holidays)
+   * Calculate working days in a month (org weekly-off pattern + non-optional holidays)
    */
   private async calculateWorkingDays(
-    month: number, 
+    month: number,
     year: number,
     organizationId: string
   ): Promise<number> {
-    const start = startOfMonth(new Date(year, month - 1));
-    const end = endOfMonth(new Date(year, month - 1));
-    const allDays = eachDayOfInterval({ start, end });
-    
-    // Get holidays from Holiday model for this month
-    const Holiday = (await import('../models/Holiday')).default;
-    const holidays = await Holiday.find({
-      organizationId,
-      date: { $gte: start, $lte: end }
-    });
-    
-    const holidayDates = new Set(
-      holidays.map(h => new Date(h.date).toDateString())
-    );
-    
-    // Exclude weekends AND holidays
-    return allDays.filter(day => 
-      !isWeekend(day) && 
-      !holidayDates.has(day.toDateString())
-    ).length;
+    return countOrganizationWorkingDaysInMonth(organizationId, month, year);
   }
 
   /**
@@ -210,12 +195,17 @@ class PayrollService {
       organizationId,
       isActive: true,
     })
-      .populate('userId', 'firstName lastName email employeeId department')
+      .populate('userId', 'firstName lastName email employeeId department isActive')
       .populate('createdBy', 'firstName lastName')
       .sort({ createdAt: -1 });
 
+    // Exclude structures for soft-deleted users (isActive=false)
+    let filtered = structures.filter((s) => {
+      const user = s.userId as any;
+      return user && user.isActive !== false;
+    });
+    
     // Filter by department or search if provided
-    let filtered = structures;
     
     if (filters?.department) {
       filtered = filtered.filter(
@@ -342,7 +332,13 @@ class PayrollService {
 
         let leaveDays = 0;
         for (const leave of leaveRecords) {
-          leaveDays += leave.totalDays;
+          leaveDays += await countOrganizationWorkingDaysInPeriod(
+            organizationId,
+            leave.startDate,
+            leave.endDate,
+            startDate,
+            endDate
+          );
         }
 
         const daysWorked = attendanceRecords + leaveDays;

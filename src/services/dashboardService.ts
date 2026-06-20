@@ -31,8 +31,9 @@ class DashboardService {
       case UserRole.SUPER_ADMIN:
         return this.getSuperAdminStats();
       case UserRole.ADMIN:
-      case UserRole.HR:
         return this.getAdminHRStats(organizationId);
+      case UserRole.HR:
+        return this.getAdminHRStats(organizationId, userRole);
       case UserRole.SUPERVISOR:
         return this.getSupervisorStats(userId, organizationId);
       default:
@@ -41,27 +42,43 @@ class DashboardService {
   }
 
   /**
-   * Get Admin/HR dashboard statistics
+   * Get Admin/HR dashboard statistics.
+   * When requesterRole/requesterId are provided (HR), stats are scoped to users HR can see (employees, supervisors, HR only).
    */
-  private async getAdminHRStats(organizationId: string | undefined): Promise<DashboardStats> {
-    // Get total users
-    const users = await userService.getAllUsers({}, organizationId);
+  private async getAdminHRStats(
+    organizationId: string | undefined,
+    requesterRole?: UserRole
+  ): Promise<DashboardStats> {
+    // Get users (role-scoped for HR: only employees, supervisors, HR)
+    const users = await userService.getAllUsers(
+      {},
+      organizationId,
+      requesterRole
+    );
     const totalUsers = users.length;
+    const userIds = users.map((u) => u._id.toString());
 
-    // Get total departments
+    // Get total departments (Admin sees all; HR sees all org departments)
     const departments = await Department.find(
       organizationId ? { organizationId } : {}
     );
     const totalDepartments = departments.length;
 
-    // Get today's attendance summary
-    const todayAttendance = await this.getTodayAttendanceSummary(organizationId);
+    // Get today's attendance summary (scoped to same user set for HR)
+    const todayAttendance = await this.getTodayAttendanceSummary(
+      organizationId,
+      requesterRole === UserRole.HR ? userIds : undefined
+    );
 
-    // Get pending leave approvals
-    const allLeaves = await Leave.find({
+    // Pending leave approvals (scoped to same user set for HR)
+    const leaveQuery: any = {
       organizationId: organizationId!,
-      status: 'pending'
-    }).lean();
+      status: { $in: ['PENDING', 'PARTIALLY_APPROVED', 'pending'] },
+    };
+    if (requesterRole === UserRole.HR && userIds.length > 0) {
+      leaveQuery.userId = { $in: users.map((u) => u._id) };
+    }
+    const allLeaves = await Leave.find(leaveQuery).lean();
     const pendingLeaveApprovals = allLeaves.length;
 
     return {
@@ -91,7 +108,7 @@ class DashboardService {
     const teamPendingLeaves = await Leave.find({
       organizationId: organizationId!,
       userId: { $in: teamMembers.map(m => m._id) },
-      status: 'pending'
+      status: { $in: ['PENDING', 'PARTIALLY_APPROVED', 'pending'] },
     }).lean();
     const pendingLeaveApprovals = teamPendingLeaves.length;
 
@@ -128,8 +145,8 @@ class DashboardService {
 
     let attendanceRecords = result.records;
 
-    // Filter by specific user IDs if provided (for Supervisor)
-    if (userIds && userIds.length > 0) {
+    // Filter by specific user IDs if provided (for Supervisor or HR)
+    if (userIds !== undefined) {
       attendanceRecords = attendanceRecords.filter((record: any) =>
         userIds.includes(record.userId.toString())
       );
@@ -141,9 +158,9 @@ class DashboardService {
     const absent = attendanceRecords.filter((r: any) => r.status === 'absent').length;
     const onLeave = attendanceRecords.filter((r: any) => r.status === 'on_leave').length;
 
-    // Get total users count
+    // Get total users count (scoped when userIds provided, else org-wide)
     let total: number;
-    if (userIds && userIds.length > 0) {
+    if (userIds !== undefined) {
       total = userIds.length;
     } else {
       const users = await userService.getAllUsers({}, organizationId);

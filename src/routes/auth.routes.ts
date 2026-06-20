@@ -19,6 +19,30 @@ router.post('/login', authController.login);
 router.post('/accept-invitation', authController.acceptInvitation);
 
 /**
+ * @route   GET /api/auth/invitation/validate
+ * @desc    Validate organization invitation (email + organizationId)
+ * @access  Public
+ */
+router.get('/invitation/validate', authController.validateOrgInvitation);
+
+/**
+ * @route   GET /api/auth/demo-invite/validate
+ * @desc    Validate demo invitation token
+ * @access  Public
+ */
+router.get('/demo-invite/validate', authController.validateDemoInvite);
+
+router.post('/forgot-password', authController.forgotPassword);
+router.post('/reset-password', authController.resetPassword);
+
+/**
+ * @route   POST /api/auth/demo-request
+ * @desc    Submit a public demo booking request
+ * @access  Public
+ */
+router.post('/demo-request', authController.requestDemo);
+
+/**
  * @route   GET /api/auth/microsoft/url
  * @desc    Get Microsoft OAuth authorization URL
  * @access  Public
@@ -40,11 +64,50 @@ router.post('/microsoft/callback', authController.microsoftCallback);
 router.get('/me', authenticate, authController.getCurrentUser);
 
 /**
+ * @route   PATCH /api/auth/me/profile
+ * @desc    Complete onboarding profile after invitation
+ * @access  Private
+ */
+router.patch('/me/profile', authenticate, authController.completeProfile);
+
+/**
+ * @route   PATCH /api/auth/me/platform-preferences
+ * @desc    Update System Admin platform preferences
+ * @access  Private (System Admin)
+ */
+router.patch(
+  '/me/platform-preferences',
+  authenticate,
+  authController.updatePlatformPreferences
+);
+
+/**
  * @route   POST /api/auth/change-password
  * @desc    Change password
  * @access  Private
  */
 router.post('/change-password', authenticate, authController.changePassword);
+
+/**
+ * @route   GET /api/auth/me/profile-photo
+ * @desc    Download profile photo (authenticated — for mobile Image)
+ * @access  Private
+ */
+router.get('/me/profile-photo', authenticate, authController.getProfilePhoto);
+
+/**
+ * @route   POST /api/auth/me/profile-photo
+ * @desc    Upload or replace profile photo
+ * @access  Private
+ */
+router.post('/me/profile-photo', authenticate, authController.updateProfilePhoto);
+
+/**
+ * @route   DELETE /api/auth/me/profile-photo
+ * @desc    Remove profile photo
+ * @access  Private
+ */
+router.delete('/me/profile-photo', authenticate, authController.removeProfilePhoto);
 
 /**
  * @route   POST /api/auth/logout

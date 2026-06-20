@@ -14,6 +14,23 @@ export enum AuthProvider {
   MICROSOFT = 'microsoft',
 }
 
+export enum Gender {
+  MALE = 'male',
+  FEMALE = 'female',
+  OTHER = 'other',
+  PREFER_NOT_TO_SAY = 'prefer_not_to_say',
+}
+
+export interface PlatformNotificationPreferences {
+  pollIntervalSec?: number;
+  refreshOnTabFocus?: boolean;
+  showUnreadBadge?: boolean;
+}
+
+export interface PlatformPreferences {
+  notifications?: PlatformNotificationPreferences;
+}
+
 export interface IUser extends Document {
   organizationId: mongoose.Types.ObjectId;
   email: string;
@@ -27,14 +44,49 @@ export interface IUser extends Document {
   employeeId?: string;
   isActive: boolean;
   createdBy?: mongoose.Types.ObjectId;
+  /** System Admin (and reserved for future roles) — platform UI preferences */
+  platformPreferences?: PlatformPreferences;
   // Microsoft authentication fields
   authProvider: AuthProvider;
   microsoftId?: string;
+  resetPasswordToken?: string;
+  resetPasswordExpires?: Date;
+  profilePhotoKey?: string;
+  attendancePolicyId?: mongoose.Types.ObjectId;
+  leavePolicyId?: mongoose.Types.ObjectId;
+  payrollPolicyId?: mongoose.Types.ObjectId;
+  joiningDate?: Date;
+  /** Demo access window end — set when a demo invitation is accepted. */
+  demoAccessExpiresAt?: Date;
+  /** True until the user completes the email invitation set-password flow. */
+  invitationPending?: boolean;
+  invitationAcceptedAt?: Date;
+  dateOfBirth?: Date;
+  gender?: Gender;
+  phone?: string;
+  /** False for new invitees until they finish the post-invite profile step. */
+  profileComplete?: boolean;
   createdAt: Date;
   updatedAt: Date;
   fullName: string;
   comparePassword(candidatePassword: string): Promise<boolean>;
 }
+
+const PlatformNotificationPrefsSchema = new Schema(
+  {
+    pollIntervalSec: { type: Number, min: 15, max: 300, default: 45 },
+    refreshOnTabFocus: { type: Boolean, default: true },
+    showUnreadBadge: { type: Boolean, default: true },
+  },
+  { _id: false }
+);
+
+const PlatformPreferencesSchema = new Schema(
+  {
+    notifications: { type: PlatformNotificationPrefsSchema, default: undefined },
+  },
+  { _id: false }
+);
 
 const UserSchema = new Schema<IUser>(
   {
@@ -98,7 +150,6 @@ const UserSchema = new Schema<IUser>(
     },
     employeeId: {
       type: String,
-      unique: true,
       sparse: true, // Allows multiple null values
       trim: true,
     },
@@ -121,6 +172,63 @@ const UserSchema = new Schema<IUser>(
       type: String,
       sparse: true,
       index: true,
+    },
+    resetPasswordToken: {
+      type: String,
+      select: false,
+    },
+    resetPasswordExpires: {
+      type: Date,
+      select: false,
+    },
+    platformPreferences: {
+      type: PlatformPreferencesSchema,
+      required: false,
+    },
+    profilePhotoKey: {
+      type: String,
+      trim: true,
+    },
+    attendancePolicyId: {
+      type: Schema.Types.ObjectId,
+      ref: 'AttendancePolicy',
+      index: true,
+    },
+    leavePolicyId: {
+      type: Schema.Types.ObjectId,
+      ref: 'LeavePolicy',
+      sparse: true,
+    },
+    payrollPolicyId: {
+      type: Schema.Types.ObjectId,
+      sparse: true,
+    },
+    joiningDate: {
+      type: Date,
+    },
+    demoAccessExpiresAt: {
+      type: Date,
+    },
+    invitationPending: {
+      type: Boolean,
+      default: false,
+    },
+    invitationAcceptedAt: {
+      type: Date,
+    },
+    dateOfBirth: {
+      type: Date,
+    },
+    gender: {
+      type: String,
+      enum: Object.values(Gender),
+    },
+    phone: {
+      type: String,
+      trim: true,
+    },
+    profileComplete: {
+      type: Boolean,
     },
   },
   {
@@ -167,13 +275,30 @@ UserSchema.methods.comparePassword = async function (
 };
 
 // Index for faster queries
-// Super Admin has globally unique email (no org), others are unique per org
-UserSchema.index({ email: 1 }, { 
-  unique: true, 
-  partialFilterExpression: { role: UserRole.SUPER_ADMIN } 
-});
-UserSchema.index({ organizationId: 1, email: 1 }, { unique: true, sparse: true });
-UserSchema.index({ organizationId: 1, employeeId: 1 }, { unique: true, sparse: true });
+// Uniqueness applies only to active users so soft-deleted emails can be reused
+UserSchema.index(
+  { email: 1 },
+  {
+    unique: true,
+    partialFilterExpression: { role: UserRole.SUPER_ADMIN, isActive: true },
+  }
+);
+UserSchema.index(
+  { organizationId: 1, email: 1 },
+  {
+    unique: true,
+    sparse: true,
+    partialFilterExpression: { isActive: true },
+  }
+);
+UserSchema.index(
+  { organizationId: 1, employeeId: 1 },
+  {
+    unique: true,
+    sparse: true,
+    partialFilterExpression: { isActive: true },
+  }
+);
 UserSchema.index({ organizationId: 1, department: 1 });
 UserSchema.index({ organizationId: 1, supervisorId: 1 });
 UserSchema.index({ organizationId: 1, role: 1 });

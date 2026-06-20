@@ -1,18 +1,50 @@
 import { Request, Response } from 'express';
 import { leaveService } from '../services/leaveService';
-import { LeaveType, LeaveStatus } from '../models/Leave';
+import { resolveOrganizationId } from '../utils/resolveOrganizationId';
+import { ForbiddenError, NotFoundError } from '../utils/AppError';
+import { normalizeLeaveStatus } from '../utils/leaveWorkflowUtils';
+import { parseLocalDateInput } from '../utils/dateInput';
 
 export class LeaveController {
-  /**
-   * Request new leave
-   */
+  private async getOrganizationId(req: Request): Promise<string> {
+    return resolveOrganizationId(req);
+  }
+
+  private handleError(res: Response, error: unknown, fallback: string, status = 500): void {
+    if (error instanceof ForbiddenError) {
+      res.status(403).json({
+        success: false,
+        error: error.message,
+        timestamp: new Date().toISOString(),
+      });
+      return;
+    }
+
+    const message = error instanceof Error ? error.message : fallback;
+    console.error(`${fallback}:`, error);
+    res.status(status).json({
+      success: false,
+      error: message,
+      timestamp: new Date().toISOString(),
+    });
+  }
+
   async requestLeave(req: Request, res: Response): Promise<void> {
     try {
       const userId = req.user!.userId;
-      const { leaveType, startDate, endDate, reason } = req.body;
+      const organizationId = await this.getOrganizationId(req);
+      const {
+        leaveTypeId,
+        startDate,
+        endDate,
+        reason,
+        isHalfDay,
+        attachmentUrl,
+        attachmentData,
+        otherLeaveTypeName,
+      } = req.body;
 
-      // Validation
-      if (!leaveType || !startDate || !endDate || !reason) {
+      if (!leaveTypeId || !startDate || !endDate || !reason) {
         res.status(400).json({
           success: false,
           error: 'Leave type, start date, end date, and reason are required',
@@ -23,11 +55,12 @@ export class LeaveController {
 
       const leave = await leaveService.requestLeave(
         userId,
-        req.organizationId!,
-        leaveType as LeaveType,
-        new Date(startDate),
-        new Date(endDate),
-        reason
+        organizationId,
+        leaveTypeId,
+        parseLocalDateInput(startDate),
+        parseLocalDateInput(endDate),
+        reason,
+        { isHalfDay, attachmentUrl, attachmentData, otherLeaveTypeName }
       );
 
       res.status(201).json({
@@ -37,6 +70,7 @@ export class LeaveController {
         timestamp: new Date().toISOString(),
       });
     } catch (error: any) {
+      console.error('Leave request failed:', error?.message || error);
       res.status(400).json({
         success: false,
         error: error.message || 'Failed to request leave',
@@ -45,22 +79,20 @@ export class LeaveController {
     }
   }
 
-  /**
-   * Get current user's leaves
-   */
   async getMyLeaves(req: Request, res: Response): Promise<void> {
     try {
       const userId = req.user!.userId;
+      const organizationId = await this.getOrganizationId(req);
       const { status, startDate, endDate, page, limit } = req.query;
 
       const filters: any = {};
-      if (status) filters.status = status as LeaveStatus;
+      if (status) filters.status = status as string;
       if (startDate) filters.startDate = new Date(startDate as string);
       if (endDate) filters.endDate = new Date(endDate as string);
 
       const result = await leaveService.getMyLeaves(
         userId,
-        req.organizationId!,
+        organizationId,
         filters,
         page ? parseInt(page as string) : undefined,
         limit ? parseInt(limit as string) : undefined
@@ -81,17 +113,15 @@ export class LeaveController {
     }
   }
 
-  /**
-   * Get current user's leave balance
-   */
   async getMyBalance(req: Request, res: Response): Promise<void> {
     try {
       const userId = req.user!.userId;
+      const organizationId = await this.getOrganizationId(req);
       const { year } = req.query;
 
       const balance = await leaveService.getMyBalance(
         userId,
-        req.organizationId!,
+        organizationId,
         year ? parseInt(year as string) : undefined
       );
 
@@ -100,28 +130,56 @@ export class LeaveController {
         data: balance,
         timestamp: new Date().toISOString(),
       });
+    } catch (error: unknown) {
+      this.handleError(res, error, 'Get balance error');
+    }
+  }
+
+  async previewLeaveDays(req: Request, res: Response): Promise<void> {
+    try {
+      const organizationId = await this.getOrganizationId(req);
+      const { startDate, endDate, isHalfDay } = req.query;
+
+      if (!startDate || !endDate) {
+        res.status(400).json({
+          success: false,
+          error: 'Start date and end date are required',
+          timestamp: new Date().toISOString(),
+        });
+        return;
+      }
+
+      const preview = await leaveService.previewLeaveDays(
+        organizationId,
+        parseLocalDateInput(String(startDate)),
+        parseLocalDateInput(String(endDate)),
+        String(isHalfDay).toLowerCase() === 'true'
+      );
+
+      res.status(200).json({
+        success: true,
+        data: preview,
+        timestamp: new Date().toISOString(),
+      });
     } catch (error: any) {
-      console.error('Get balance error:', error);
-      res.status(500).json({
+      res.status(400).json({
         success: false,
-        error: error.message || 'Failed to get leave balance',
+        error: error.message || 'Failed to preview leave days',
         timestamp: new Date().toISOString(),
       });
     }
   }
 
-  /**
-   * Get pending leaves (Supervisor/HR/Admin)
-   */
   async getPendingLeaves(req: Request, res: Response): Promise<void> {
     try {
       const userId = req.user!.userId;
       const userRole = req.user!.role;
+      const organizationId = await this.getOrganizationId(req);
       const { page, limit } = req.query;
 
       const result = await leaveService.getPendingLeaves(
         userId,
-        req.organizationId!,
+        organizationId,
         userRole,
         page ? parseInt(page as string) : undefined,
         limit ? parseInt(limit as string) : undefined
@@ -142,22 +200,21 @@ export class LeaveController {
     }
   }
 
-  /**
-   * Get all leaves with filters (HR/Admin)
-   */
   async getAllLeaves(req: Request, res: Response): Promise<void> {
     try {
-      const { userId, status, leaveType, startDate, endDate, page, limit } = req.query;
+      const { userId, status, leaveTypeId, startDate, endDate, page, limit } = req.query;
 
       const filters: any = {};
       if (userId) filters.userId = userId as string;
-      if (status) filters.status = status as LeaveStatus;
-      if (leaveType) filters.leaveType = leaveType as LeaveType;
+      if (status) filters.status = status as string;
+      if (leaveTypeId) filters.leaveTypeId = leaveTypeId as string;
       if (startDate) filters.startDate = new Date(startDate as string);
       if (endDate) filters.endDate = new Date(endDate as string);
 
+      const organizationId = await this.getOrganizationId(req);
+
       const result = await leaveService.getAllLeaves(
-        req.organizationId!,
+        organizationId,
         filters,
         page ? parseInt(page as string) : undefined,
         limit ? parseInt(limit as string) : undefined
@@ -178,9 +235,45 @@ export class LeaveController {
     }
   }
 
-  /**
-   * Get leaves for calendar view
-   */
+  async getTeamLeaves(req: Request, res: Response): Promise<void> {
+    try {
+      const requesterUserId = req.user!.userId;
+      const requesterRole = req.user!.role;
+      const { userId, status, leaveTypeId, startDate, endDate, page, limit } = req.query;
+
+      const filters: any = {};
+      if (userId) filters.userId = userId as string;
+      if (status) filters.status = status as string;
+      if (leaveTypeId) filters.leaveTypeId = leaveTypeId as string;
+      if (startDate) filters.startDate = new Date(startDate as string);
+      if (endDate) filters.endDate = new Date(endDate as string);
+
+      const organizationId = await this.getOrganizationId(req);
+
+      const result = await leaveService.getTeamLeaves(
+        organizationId,
+        requesterRole,
+        requesterUserId,
+        filters,
+        page ? parseInt(page as string) : undefined,
+        limit ? parseInt(limit as string) : undefined
+      );
+
+      res.status(200).json({
+        success: true,
+        data: result.records,
+        pagination: result.pagination,
+        timestamp: new Date().toISOString(),
+      });
+    } catch (error: any) {
+      res.status(500).json({
+        success: false,
+        error: error.message || 'Failed to get team leaves',
+        timestamp: new Date().toISOString(),
+      });
+    }
+  }
+
   async getCalendarLeaves(req: Request, res: Response): Promise<void> {
     try {
       const userId = req.user!.userId;
@@ -207,8 +300,10 @@ export class LeaveController {
         targetUserId = filterUserId as string;
       }
 
+      const organizationId = await this.getOrganizationId(req);
+
       const leaves = await leaveService.getCalendarLeaves(
-        req.organizationId!,
+        organizationId,
         parseInt(month as string),
         parseInt(year as string),
         targetUserId,
@@ -229,20 +324,58 @@ export class LeaveController {
     }
   }
 
-  /**
-   * Approve leave
-   */
+  async getLeaveApprovals(req: Request, res: Response): Promise<void> {
+    try {
+      const approvals = await leaveService.getLeaveApprovals(req.params.id);
+      res.status(200).json({ success: true, data: approvals, timestamp: new Date().toISOString() });
+    } catch (error: any) {
+      res.status(500).json({
+        success: false,
+        error: error.message || 'Failed to get leave approvals',
+        timestamp: new Date().toISOString(),
+      });
+    }
+  }
+
+  async getLeaveAttachment(req: Request, res: Response): Promise<void> {
+    try {
+      const organizationId = await this.getOrganizationId(req);
+      const { buffer, contentType } = await leaveService.getLeaveAttachmentBuffer(
+        req.params.id,
+        req.user!.userId,
+        req.user!.role,
+        organizationId
+      );
+      res.setHeader('Content-Type', contentType);
+      res.setHeader('Cache-Control', 'private, max-age=300');
+      res.status(200).send(buffer);
+    } catch (error: unknown) {
+      if (error instanceof NotFoundError) {
+        res.status(404).json({
+          success: false,
+          error: error.message,
+          timestamp: new Date().toISOString(),
+        });
+        return;
+      }
+      this.handleError(res, error, 'Failed to get leave attachment');
+    }
+  }
+
   async approveLeave(req: Request, res: Response): Promise<void> {
     try {
       const { id } = req.params;
       const reviewerId = req.user!.userId;
+      const reviewerRole = req.user!.role;
       const { notes } = req.body;
 
-      const leave = await leaveService.approveLeave(id, reviewerId, notes);
+      const leave = await leaveService.approveLeave(id, reviewerId, reviewerRole, notes);
 
       res.status(200).json({
         success: true,
-        message: 'Leave approved successfully',
+        message: normalizeLeaveStatus(leave.status) === 'APPROVED'
+          ? 'Leave approved successfully'
+          : 'Leave advanced to next approval step',
         data: leave,
         timestamp: new Date().toISOString(),
       });
@@ -255,13 +388,11 @@ export class LeaveController {
     }
   }
 
-  /**
-   * Reject leave
-   */
   async rejectLeave(req: Request, res: Response): Promise<void> {
     try {
       const { id } = req.params;
       const reviewerId = req.user!.userId;
+      const reviewerRole = req.user!.role;
       const { notes } = req.body;
 
       if (!notes) {
@@ -273,7 +404,7 @@ export class LeaveController {
         return;
       }
 
-      const leave = await leaveService.rejectLeave(id, reviewerId, notes);
+      const leave = await leaveService.rejectLeave(id, reviewerId, reviewerRole, notes);
 
       res.status(200).json({
         success: true,
@@ -290,9 +421,6 @@ export class LeaveController {
     }
   }
 
-  /**
-   * Cancel leave (by employee)
-   */
   async cancelLeave(req: Request, res: Response): Promise<void> {
     try {
       const { id } = req.params;
@@ -312,6 +440,37 @@ export class LeaveController {
         error: error.message || 'Failed to cancel leave',
         timestamp: new Date().toISOString(),
       });
+    }
+  }
+
+  async adjustBalance(req: Request, res: Response): Promise<void> {
+    try {
+      const organizationId = await this.getOrganizationId(req);
+      const { employeeId, year, leaveTypeId, allocated } = req.body;
+
+      if (!employeeId || !year || !leaveTypeId || allocated === undefined) {
+        res.status(400).json({
+          success: false,
+          error: 'employeeId, year, leaveTypeId, and allocated are required',
+        });
+        return;
+      }
+
+      const balance = await leaveService.adjustBalance(
+        organizationId,
+        employeeId,
+        Number(year),
+        leaveTypeId,
+        Number(allocated)
+      );
+
+      res.status(200).json({
+        success: true,
+        message: 'Leave balance updated',
+        data: balance,
+      });
+    } catch (error: any) {
+      res.status(400).json({ success: false, error: error.message || 'Failed to adjust balance' });
     }
   }
 }

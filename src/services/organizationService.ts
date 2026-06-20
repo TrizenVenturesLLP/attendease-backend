@@ -5,6 +5,15 @@ import Organization, {
   MicrosoftAuthConfig,
 } from '../models/Organization';
 import User from '../models/User';
+import Attendance from '../models/Attendance';
+import Leave from '../models/Leave';
+import LeaveBalance from '../models/LeaveBalance';
+import Holiday from '../models/Holiday';
+import Department from '../models/Department';
+import SalaryStructure from '../models/SalaryStructure';
+import PayrollRecord from '../models/PayrollRecord';
+import PayrollRun from '../models/PayrollRun';
+import NotificationRead from '../models/NotificationRead';
 import {
   BadRequestError,
   NotFoundError,
@@ -43,6 +52,88 @@ export interface OrganizationStats {
   isActive: boolean;
 }
 
+/** Normalize subdomain to a single slug (e.g. "xyz.org" -> "xyz"). Model only allows [a-z0-9-]+. */
+function normalizeSubdomainSlug(value: string | undefined): string | undefined {
+  if (value == null || typeof value !== 'string') return undefined;
+  const trimmed = value.trim().toLowerCase();
+  if (!trimmed) return undefined;
+  const slug = trimmed.includes('.') ? trimmed.split('.')[0]! : trimmed;
+  return slug || undefined;
+}
+
+/**
+ * Generate a 3-char uppercase org code from the org name — always letters, no padding.
+ * Rules:
+ *   1 word  → first 3 chars            "Trizen"       → TRI
+ *   2 words → first 2 of word1 + first of word2  "Trizen HR" → TRH
+ *   3+ words→ first char of each word (up to 3)  "Acme Corp Ltd" → ACL
+ */
+function buildOrgCode(name: string): string {
+  const clean = name.trim().toUpperCase().replace(/[^A-Z0-9\s]/g, '');
+  const words = clean.split(/\s+/).filter(Boolean);
+
+  let code: string;
+  if (words.length === 1) {
+    code = (words[0]!).slice(0, 3);
+  } else if (words.length === 2) {
+    code = (words[0]!).slice(0, 2) + (words[1]!).slice(0, 1);
+  } else {
+    code = words.slice(0, 3).map(w => w[0]).join('');
+  }
+
+  // Ensure exactly 3 chars — pad with trailing chars from the first word if short
+  if (code.length < 3) {
+    const extra = (words[0] || 'X').slice(code.length, code.length + (3 - code.length));
+    code = (code + extra).slice(0, 3);
+  }
+
+  return code.slice(0, 3);
+}
+
+async function resolveUniqueOrgCode(baseName: string): Promise<string> {
+  const base = buildOrgCode(baseName);
+  // Try base first, then append numeric suffix on last char
+  if (!await Organization.exists({ orgCode: base })) return base;
+  // Try variations: replace last char with 1–9, A–Z
+  const chars = '123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+  for (const c of chars) {
+    const candidate = base.slice(0, 2) + c;
+    if (!await Organization.exists({ orgCode: candidate })) return candidate;
+  }
+  // Fallback: random 3-char alphanumeric
+  const alpha = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+  for (let i = 0; i < 100; i++) {
+    const rand = Array.from({length: 3}, () => alpha[Math.floor(Math.random() * alpha.length)]).join('');
+    if (!await Organization.exists({ orgCode: rand })) return rand;
+  }
+  throw new Error('Could not generate unique org code');
+}
+
+function slugifyFromName(name: string): string {
+  const base = name
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .replace(/-{2,}/g, '-');
+  const sliced = base.slice(0, 50);
+  return sliced || 'org';
+}
+
+async function resolveUniqueSubdomain(baseSlug: string): Promise<string> {
+  let candidate = baseSlug;
+  let suffix = 1;
+
+  while (await Organization.exists({ subdomain: candidate })) {
+    suffix += 1;
+    const tail = `-${suffix}`;
+    const trimmedBase = baseSlug.slice(0, Math.max(0, 50 - tail.length));
+    candidate = `${trimmedBase}${tail}`;
+  }
+
+  return candidate;
+}
+
 class OrganizationService {
   /**
    * Create a new organization (Super Admin only)
@@ -51,8 +142,6 @@ class OrganizationService {
     data: CreateOrganizationData
   ): Promise<IOrganization> {
     const normalizedName = data.name?.trim();
-    const normalizedSubdomain = data.subdomain?.trim().toLowerCase() || undefined;
-
     // Validate organization name
     if (!normalizedName || normalizedName.length === 0) {
       throw new BadRequestError('Organization name is required');
@@ -66,20 +155,26 @@ class OrganizationService {
       );
     }
 
-    // Check if subdomain is already taken
-    if (normalizedSubdomain) {
+    let subdomainSlug = normalizeSubdomainSlug(data.subdomain);
+    if (!subdomainSlug) {
+      subdomainSlug = await resolveUniqueSubdomain(slugifyFromName(normalizedName));
+    } else {
       const existingSubdomain = await Organization.findOne({
-        subdomain: normalizedSubdomain,
+        subdomain: subdomainSlug,
       });
       if (existingSubdomain) {
         throw new ConflictError('Subdomain is already taken');
       }
     }
 
+    // Auto-generate unique 3-char org code
+    const orgCode = await resolveUniqueOrgCode(normalizedName);
+
     // Create organization with default settings
     const organization = await Organization.create({
-      name: normalizedName,
-      subdomain: normalizedSubdomain,
+      name: data.name.trim(),
+      orgCode,
+      subdomain: subdomainSlug,
       subscriptionPlan: data.subscriptionPlan || SubscriptionPlan.FREE,
       subscriptionExpiry: data.subscriptionExpiry,
       settings: {
@@ -111,10 +206,10 @@ class OrganizationService {
   }
 
   /**
-   * Get all organizations (Super Admin only)
+   * Get all organizations (Super Admin only) — includes active and inactive.
    */
   async getAllOrganizations(): Promise<IOrganization[]> {
-    const organizations = await Organization.find()
+    const organizations = await Organization.find({})
       .populate('createdBy', 'firstName lastName email')
       .sort({ createdAt: -1 });
 
@@ -159,11 +254,6 @@ class OrganizationService {
     }
 
     const normalizedName = data.name?.trim();
-    const normalizedSubdomain =
-      data.subdomain !== undefined
-        ? data.subdomain.trim().toLowerCase() || undefined
-        : undefined;
-
     // Check for name uniqueness if name is being updated
     if (
       normalizedName &&
@@ -177,13 +267,14 @@ class OrganizationService {
       }
     }
 
+    const subdomainSlug = normalizeSubdomainSlug(data.subdomain);
     // Check for subdomain uniqueness if subdomain is being updated
     if (
-      data.subdomain !== undefined &&
-      normalizedSubdomain !== organization.subdomain
+      subdomainSlug !== undefined &&
+      subdomainSlug !== organization.subdomain
     ) {
       const existingSubdomain = await Organization.findOne({
-        subdomain: normalizedSubdomain,
+        subdomain: subdomainSlug,
       });
       if (existingSubdomain) {
         throw new ConflictError('Subdomain is already taken');
@@ -193,8 +284,13 @@ class OrganizationService {
     // Update fields
     if (normalizedName) organization.name = normalizedName;
     if (data.subdomain !== undefined)
-      organization.subdomain = normalizedSubdomain;
-    if (data.isActive !== undefined) organization.isActive = data.isActive;
+      organization.subdomain = subdomainSlug ?? undefined;
+    if (data.isActive !== undefined) {
+      organization.isActive = data.isActive;
+      if (data.isActive === true) {
+        organization.deletedAt = undefined;
+      }
+    }
     if (data.subscriptionPlan)
       organization.subscriptionPlan = data.subscriptionPlan;
     if (data.subscriptionExpiry !== undefined)
@@ -206,6 +302,12 @@ class OrganizationService {
         organization.settings.workingHours = {
           ...organization.settings.workingHours,
           ...data.settings.workingHours,
+        };
+      }
+      if (data.settings.workingDays) {
+        organization.settings.workingDays = {
+          ...organization.settings.workingDays,
+          ...data.settings.workingDays,
         };
       }
       if (data.settings.leavePolicy) {
@@ -245,7 +347,8 @@ class OrganizationService {
   }
 
   /**
-   * Delete organization (soft delete)
+   * Permanently delete an organization and all tenant-scoped data.
+   * Use {@link updateOrganization} with isActive: false to pause an org without removing data.
    */
   async deleteOrganization(id: string): Promise<void> {
     if (!mongoose.Types.ObjectId.isValid(id)) {
@@ -258,9 +361,24 @@ class OrganizationService {
       throw new NotFoundError('Organization not found');
     }
 
-    // Soft delete by marking as inactive
-    organization.isActive = false;
-    await organization.save();
+    const orgObjectId = new mongoose.Types.ObjectId(id);
+
+    await PayrollRecord.deleteMany({ organizationId: orgObjectId });
+    await PayrollRun.deleteMany({ organizationId: orgObjectId });
+    await SalaryStructure.deleteMany({ organizationId: orgObjectId });
+    await Leave.deleteMany({ organizationId: orgObjectId });
+    await LeaveBalance.deleteMany({ organizationId: orgObjectId });
+    await Attendance.deleteMany({ organizationId: orgObjectId });
+    await Holiday.deleteMany({ organizationId: orgObjectId });
+    await Department.deleteMany({ organizationId: orgObjectId });
+
+    const userIds = await User.find({ organizationId: orgObjectId }).distinct('_id');
+    if (userIds.length > 0) {
+      await NotificationRead.deleteMany({ userId: { $in: userIds } });
+    }
+    await User.deleteMany({ organizationId: orgObjectId });
+
+    await Organization.findByIdAndDelete(id);
   }
 
   /**
