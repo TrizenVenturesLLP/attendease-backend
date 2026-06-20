@@ -14,6 +14,13 @@ export enum AuthProvider {
   MICROSOFT = 'microsoft',
 }
 
+export enum Gender {
+  MALE = 'male',
+  FEMALE = 'female',
+  OTHER = 'other',
+  PREFER_NOT_TO_SAY = 'prefer_not_to_say',
+}
+
 export interface PlatformNotificationPreferences {
   pollIntervalSec?: number;
   refreshOnTabFocus?: boolean;
@@ -54,6 +61,11 @@ export interface IUser extends Document {
   /** True until the user completes the email invitation set-password flow. */
   invitationPending?: boolean;
   invitationAcceptedAt?: Date;
+  dateOfBirth?: Date;
+  gender?: Gender;
+  phone?: string;
+  /** False for new invitees until they finish the post-invite profile step. */
+  profileComplete?: boolean;
   createdAt: Date;
   updatedAt: Date;
   fullName: string;
@@ -203,6 +215,20 @@ const UserSchema = new Schema<IUser>(
     },
     invitationAcceptedAt: {
       type: Date,
+    },
+    dateOfBirth: {
+      type: Date,
+    },
+    gender: {
+      type: String,
+      enum: Object.values(Gender),
+    },
+    phone: {
+      type: String,
+      trim: true,
+    },
+    profileComplete: {
+      type: Boolean,
     },
   },
   {

@@ -228,15 +228,50 @@ class AuthController {
     try {
       const { email, organizationId, password, token } = req.body;
 
+      let result: Awaited<ReturnType<typeof authService.acceptInvitation>>;
       if (token) {
-        await authService.acceptInvitation({ token, password });
+        result = await authService.acceptInvitation({ token, password });
       } else {
-        await authService.acceptInvitation({ email, organizationId, password });
+        result = await authService.acceptInvitation({ email, organizationId, password });
       }
 
       const response: ApiResponse = {
         success: true,
-        message: 'Password set successfully. You can now log in.',
+        message: result
+          ? 'Password set successfully. Please complete your profile.'
+          : 'Password set successfully. You can now log in.',
+        data: result ?? undefined,
+        timestamp: new Date().toISOString(),
+      };
+
+      res.status(200).json(response);
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  /**
+   * @route   PATCH /api/auth/me/profile
+   * @desc    Complete onboarding profile (DOB, gender, phone)
+   * @access  Private
+   */
+  async completeProfile(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      if (!req.user) {
+        throw new BadRequestError('User not authenticated');
+      }
+
+      const { dateOfBirth, gender, phone } = req.body;
+      const user = await authService.completeProfile(req.user.userId, {
+        dateOfBirth,
+        gender,
+        phone,
+      });
+
+      const response: ApiResponse<typeof user> = {
+        success: true,
+        message: 'Profile completed successfully',
+        data: user,
         timestamp: new Date().toISOString(),
       };
 

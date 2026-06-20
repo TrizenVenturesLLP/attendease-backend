@@ -394,6 +394,8 @@ class UserController {
         role: user.role,
       });
 
+      await userService.resetInvitationForResend(id, req.organizationId);
+
       await emailNotificationService.sendRoleInvitation({
         email: user.email,
         role: user.role as UserRole,

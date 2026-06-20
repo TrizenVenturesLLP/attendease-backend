@@ -421,6 +421,44 @@ class EmailNotificationService {
       });
     }
   }
+
+  async sendBirthdayEmail(input: {
+    email: string;
+    name: string;
+    organizationName?: string;
+  }): Promise<void> {
+    if (!this.isEmailConfigured()) {
+      this.warnEmailSkipped('birthday');
+      return;
+    }
+
+    const endpoint = `${config.emailService.url}/api/v1/email/birthday`;
+
+    if (!config.emailService.authToken) {
+      logger.warn('Birthday email skipped: EMAIL_SERVICE_AUTH_TOKEN not set');
+      return;
+    }
+
+    try {
+      await axios.post(
+        endpoint,
+        {
+          email: input.email,
+          name: input.name,
+          organizationName: input.organizationName,
+          platformName: 'TrizenHR',
+        },
+        {
+          headers: this.getHeaders(),
+          timeout: 10000,
+        }
+      );
+      logger.info('Birthday email API OK', { to: input.email });
+    } catch (error) {
+      logger.error('Birthday email failed', formatAxiosError(error));
+      throw error;
+    }
+  }
 }
 
 export function logEmailServiceConfigAtStartup(): void {

@@ -10,6 +10,7 @@ import {
   UnauthorizedError,
   NotFoundError,
   ForbiddenError,
+  ConflictError,
 } from '../utils/AppError';
 import { JwtPayload } from '../utils/ApiResponse';
 import { profileMinioStorage } from '../utils/storage/MinIOStorage';
@@ -18,6 +19,20 @@ import {
   validateOrgInvitation as validateOrgInvitationLink,
   markInvitationAccepted,
 } from './invitationValidationService';
+
+function resolveProfileComplete(user: IUser): boolean {
+  if (user.profileComplete === true) {
+    return true;
+  }
+  if (user.profileComplete === false) {
+    return false;
+  }
+  // Invite accepted but personal details were never saved
+  if (user.invitationAcceptedAt && (!user.dateOfBirth || !user.gender || !user.phone)) {
+    return false;
+  }
+  return true;
+}
 
 export interface ClientUser {
   id: string;
@@ -41,6 +56,10 @@ export interface ClientUser {
   profilePhotoUrl?: string;
   hasProfilePhoto?: boolean;
   createdAt?: string;
+  dateOfBirth?: string;
+  gender?: string;
+  phone?: string;
+  profileComplete?: boolean;
 }
 
 export interface LoginResult {
@@ -254,6 +273,12 @@ class AuthService {
       createdAt: (user as IUser).createdAt
         ? new Date((user as IUser).createdAt as Date).toISOString()
         : undefined,
+      dateOfBirth: (user as IUser).dateOfBirth
+        ? new Date((user as IUser).dateOfBirth as Date).toISOString().slice(0, 10)
+        : undefined,
+      gender: (user as IUser).gender,
+      phone: (user as IUser).phone,
+      profileComplete: resolveProfileComplete(user as IUser),
     };
 
     if (organizationId && role !== UserRole.SUPER_ADMIN) {
@@ -328,7 +353,7 @@ class AuthService {
     payload:
       | { email: string; organizationId: string; password: string; token?: never }
       | { token: string; password: string; email?: never; organizationId?: never }
-  ): Promise<void> {
+  ): Promise<LoginResult | void> {
     if ('token' in payload && payload.token) {
       await demoInvitationService.acceptByToken(payload.token, payload.password);
       return;
@@ -344,7 +369,19 @@ class AuthService {
       throw new BadRequestError('Password must be at least 6 characters');
     }
 
-    await validateOrgInvitationLink(email, organizationId);
+    const validation = await validateOrgInvitationLink(email, organizationId);
+
+    if (validation.status === 'profile_incomplete') {
+      throw new BadRequestError(
+        'Your password is already set. Sign in to complete your profile.'
+      );
+    }
+
+    if (validation.status === 'already_onboarded') {
+      throw new ConflictError(
+        'This invitation link has already been used. Please sign in with your account.'
+      );
+    }
 
     const normalizedEmail = email.trim().toLowerCase();
 
@@ -368,7 +405,64 @@ class AuthService {
     }
 
     user.password = password;
+    user.profileComplete = false;
     await markInvitationAccepted(user);
+
+    const token = this.generateToken(user);
+    return this.createLoginResult(token, user);
+  }
+
+  /**
+   * Complete onboarding profile after invitation password setup.
+   */
+  async completeProfile(
+    userId: string,
+    data: { dateOfBirth: string; gender: string; phone: string }
+  ): Promise<ClientUser> {
+    if (!data.dateOfBirth?.trim()) {
+      throw new BadRequestError('Date of birth is required');
+    }
+
+    const dob = new Date(data.dateOfBirth);
+    if (Number.isNaN(dob.getTime())) {
+      throw new BadRequestError('Invalid date of birth');
+    }
+
+    const today = new Date();
+    today.setHours(23, 59, 59, 999);
+    if (dob > today) {
+      throw new BadRequestError('Date of birth cannot be in the future');
+    }
+
+    if (!data.gender?.trim()) {
+      throw new BadRequestError('Gender is required');
+    }
+
+    const validGenders = ['male', 'female', 'other', 'prefer_not_to_say'];
+    if (!validGenders.includes(data.gender.trim())) {
+      throw new BadRequestError('Invalid gender value');
+    }
+
+    const phone = data.phone?.trim();
+    if (!phone) {
+      throw new BadRequestError('Phone number is required');
+    }
+    if (phone.length < 6) {
+      throw new BadRequestError('Enter a valid phone number');
+    }
+
+    const user = await User.findById(userId);
+    if (!user) {
+      throw new NotFoundError('User not found');
+    }
+
+    user.dateOfBirth = dob;
+    user.gender = data.gender.trim() as IUser['gender'];
+    user.phone = phone;
+    user.profileComplete = true;
+    await user.save();
+
+    return this.formatClientUser(user);
   }
 
   /**

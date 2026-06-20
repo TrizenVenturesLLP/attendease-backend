@@ -1,3 +1,4 @@
+import crypto from 'crypto';
 import mongoose from 'mongoose';
 import User, { IUser } from '../models/User';
 import { BadRequestError, ConflictError, NotFoundError } from '../utils/AppError';
@@ -8,6 +9,27 @@ export function normalizeInvitationEmail(email: string): string {
 
 export function formatExistingAccountMessage(email: string): string {
   return `An account already exists with ${email}. Please use another email address or sign in with your existing account.`;
+}
+
+/** True when the user still needs to set a password via the invite link. */
+export function needsPasswordSetup(user: {
+  invitationPending?: boolean;
+  invitationAcceptedAt?: Date;
+}): boolean {
+  if (user.invitationPending === true) {
+    return true;
+  }
+  return !user.invitationAcceptedAt;
+}
+
+/** Reset invite flags so a new invitation email can be used (resend / reactivate). */
+export async function resetUserInvitationState(user: IUser): Promise<IUser> {
+  user.invitationPending = true;
+  user.invitationAcceptedAt = undefined;
+  user.profileComplete = false;
+  user.password = crypto.randomBytes(32).toString('hex');
+  await user.save();
+  return user;
 }
 
 /** User has finished onboarding and should not receive a fresh invite on this email. */
@@ -105,13 +127,6 @@ export async function validateOrgInvitation(email: string, organizationId: strin
     throw new BadRequestError('Invalid organization ID');
   }
 
-  const establishedElsewhere = await findEstablishedAccountByEmail(normalized, {
-    allowPendingInOrganizationId: organizationId,
-  });
-  if (establishedElsewhere) {
-    throw new ConflictError(formatExistingAccountMessage(normalized));
-  }
-
   const user = await User.findOne({
     email: normalized,
     organizationId,
@@ -124,17 +139,33 @@ export async function validateOrgInvitation(email: string, organizationId: strin
     );
   }
 
-  if (isEstablishedAccount(user)) {
+  const establishedInOtherOrg = await User.findOne({
+    email: normalized,
+    isActive: true,
+    organizationId: { $ne: organizationId },
+  });
+
+  if (establishedInOtherOrg && isEstablishedAccount(establishedInOtherOrg)) {
     throw new ConflictError(formatExistingAccountMessage(normalized));
   }
 
-  return {
+  const base = {
     email: normalized,
     organizationId,
     role: user.role,
     firstName: user.firstName,
     lastName: user.lastName,
   };
+
+  if (needsPasswordSetup(user)) {
+    return { ...base, status: 'pending_password' as const };
+  }
+
+  if (user.profileComplete === false) {
+    return { ...base, status: 'profile_incomplete' as const };
+  }
+
+  return { ...base, status: 'already_onboarded' as const };
 }
 
 export async function validateDemoInvitationEmail(

@@ -18,7 +18,10 @@ import {
   ConflictError,
 } from '../utils/AppError';
 import { deleteUsersAndRelatedData } from './userCascadeDelete';
-import { assertEmailAvailableForInvitation } from './invitationValidationService';
+import {
+  assertEmailAvailableForInvitation,
+  resetUserInvitationState,
+} from './invitationValidationService';
 
 export interface CreateUserData {
   organizationId?: string;
@@ -118,7 +121,6 @@ class UserService {
     }
 
     existing.email = userData.email.toLowerCase().trim();
-    existing.password = userData.password;
     existing.firstName = userData.firstName;
     existing.lastName = userData.lastName;
     existing.role = userData.role;
@@ -130,6 +132,18 @@ class UserService {
     existing.isActive = true;
     existing.createdBy = new mongoose.Types.ObjectId(createdByUserId);
     existing.authProvider = AuthProvider.LOCAL;
+
+    const isInviteFlow = !userData.password?.trim();
+    if (isInviteFlow) {
+      existing.password = crypto.randomBytes(32).toString('hex');
+      existing.invitationPending = true;
+      existing.invitationAcceptedAt = undefined;
+      existing.profileComplete = false;
+    } else {
+      existing.password = userData.password!;
+      existing.invitationPending = false;
+      existing.profileComplete = true;
+    }
 
     await existing.save();
     return existing;
@@ -460,6 +474,7 @@ class UserService {
       email: normalizedEmail,
       password,
       invitationPending: isInviteFlow,
+      profileComplete: isInviteFlow ? false : true,
       createdBy: createdByUserId,
       attendancePolicyId: withDefaults.attendancePolicyId
         ? new mongoose.Types.ObjectId(withDefaults.attendancePolicyId)
@@ -849,6 +864,26 @@ class UserService {
 
     await user.save();
     return user;
+  }
+
+  /**
+   * Reset invitation state before resending invite email (fresh set-password link).
+   */
+  async resetInvitationForResend(userId: string, organizationId?: string): Promise<IUser> {
+    const user = await User.findById(userId).select('+password');
+    if (!user) {
+      throw new NotFoundError('User not found');
+    }
+    if (
+      organizationId &&
+      user.organizationId?.toString() !== organizationId
+    ) {
+      throw new ForbiddenError('User does not belong to your organization');
+    }
+    if (user.role === UserRole.SUPER_ADMIN) {
+      throw new ForbiddenError('Cannot resend invitation to super admin');
+    }
+    return resetUserInvitationState(user);
   }
 
   /**

@@ -64,6 +64,13 @@ router.post('/microsoft/callback', authController.microsoftCallback);
 router.get('/me', authenticate, authController.getCurrentUser);
 
 /**
+ * @route   PATCH /api/auth/me/profile
+ * @desc    Complete onboarding profile after invitation
+ * @access  Private
+ */
+router.patch('/me/profile', authenticate, authController.completeProfile);
+
+/**
  * @route   PATCH /api/auth/me/platform-preferences
  * @desc    Update System Admin platform preferences
  * @access  Private (System Admin)

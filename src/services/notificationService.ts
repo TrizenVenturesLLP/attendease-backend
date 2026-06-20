@@ -14,6 +14,7 @@ import { leaveService } from './leaveService';
 import { attendanceService } from './attendanceService';
 import { attendanceRegularizationService } from './attendanceRegularizationService';
 import { REQUEST_TYPE_LABELS } from '../utils/attendanceRegularizationValidation';
+import { birthdayTodayFilter, formatUserDisplayName, getTodayMonthDay } from '../utils/birthdayUtils';
 
 export type NotificationItemType =
   | 'leave_pending'
@@ -27,7 +28,9 @@ export type NotificationItemType =
   | 'payroll_completed'
   | 'payroll_draft'
   | 'subscription_expiring'
-  | 'account_deactivated';
+  | 'account_deactivated'
+  | 'birthday_today'
+  | 'colleague_birthday';
 
 export interface NotificationItemDTO {
   id: string;
@@ -356,6 +359,42 @@ export class NotificationService {
             href: '/dashboard/payroll',
             createdAt: toIso(run.updatedAt as Date),
           });
+        }
+      }
+
+      // Birthday notifications (self + colleagues in the same organization)
+      if (role !== UserRole.SUPER_ADMIN) {
+        const { dayKey } = getTodayMonthDay();
+        const birthdayUsers = await User.find({
+          organizationId: orgId,
+          ...birthdayTodayFilter(),
+        })
+          .select('firstName lastName fullName email')
+          .lean();
+
+        for (const birthdayUser of birthdayUsers) {
+          const birthdayUserId = String(birthdayUser._id);
+          const name = formatUserDisplayName(birthdayUser);
+
+          if (birthdayUserId === userId) {
+            items.push({
+              id: `birthday-self:${userId}:${dayKey}`,
+              type: 'birthday_today',
+              title: 'Happy birthday!',
+              body: `Wishing you a wonderful birthday, ${birthdayUser.firstName || name}!`,
+              href: '/dashboard/profile',
+              createdAt: new Date().toISOString(),
+            });
+          } else {
+            items.push({
+              id: `birthday-colleague:${birthdayUserId}:${dayKey}`,
+              type: 'colleague_birthday',
+              title: `${name}'s birthday`,
+              body: `Today is ${name}'s birthday. Send them your best wishes!`,
+              href: '/dashboard/users',
+              createdAt: new Date().toISOString(),
+            });
+          }
         }
       }
 
