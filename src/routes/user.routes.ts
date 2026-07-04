@@ -127,6 +127,18 @@ router.post(
 );
 
 /**
+ * @route   PATCH /api/users/:id/field-tracking
+ * @desc    Enable or disable field location tracking for a specific user
+ * @access  Private (Super Admin/Admin/HR)
+ * @body    { fieldTrackingEnabled: boolean, fieldTrackingIntervalMinutes?: number }
+ */
+router.patch(
+  '/:id/field-tracking',
+  authorize(UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.HR),
+  userController.toggleFieldTracking
+);
+
+/**
  * @route   DELETE /api/users/:id
  * @desc    Delete user
  * @access  Private (Super Admin/Admin)

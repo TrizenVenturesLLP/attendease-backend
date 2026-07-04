@@ -433,6 +433,45 @@ class UserController {
       next(error);
     }
   }
+  /**
+   * @route   PATCH /api/users/:id/field-tracking
+   * @desc    Enable or disable field tracking for a user
+   * @access  Private (Super Admin/Admin/HR)
+   * @body    { fieldTrackingEnabled: boolean, fieldTrackingIntervalMinutes?: number }
+   */
+  async toggleFieldTracking(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const { id } = req.params;
+      const { fieldTrackingEnabled, fieldTrackingIntervalMinutes } = req.body;
+
+      if (typeof fieldTrackingEnabled !== 'boolean') {
+        throw new BadRequestError('fieldTrackingEnabled must be a boolean (true or false)');
+      }
+
+      const updates: UpdateUserData = { fieldTrackingEnabled };
+
+      if (fieldTrackingIntervalMinutes !== undefined) {
+        const interval = parseInt(fieldTrackingIntervalMinutes);
+        if (isNaN(interval) || interval < 1 || interval > 60) {
+          throw new BadRequestError('fieldTrackingIntervalMinutes must be a number between 1 and 60');
+        }
+        updates.fieldTrackingIntervalMinutes = interval;
+      }
+
+      const user = await userService.updateUser(id, updates, req.user!.role as UserRole);
+
+      const response: ApiResponse<typeof user> = {
+        success: true,
+        message: `Field tracking ${fieldTrackingEnabled ? 'enabled' : 'disabled'} for user`,
+        data: user,
+        timestamp: new Date().toISOString(),
+      };
+
+      res.status(200).json(response);
+    } catch (error) {
+      next(error);
+    }
+  }
 }
 
 export default new UserController();

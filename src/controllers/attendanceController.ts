@@ -3,18 +3,17 @@ import { attendanceService } from '../services/attendanceService';
 import { AttendanceStatus } from '../models/Attendance';
 
 export class AttendanceController {
-  /**
-   * Mark check-in
-   */
   async checkIn(req: Request, res: Response): Promise<void> {
     try {
       const userId = req.user!.userId;
-      const { photoData } = req.body;
+      const { photoData, latitude, longitude } = req.body;
 
       const attendance = await attendanceService.checkIn(
         userId,
         req.organizationId!,
-        photoData
+        photoData,
+        latitude ? parseFloat(latitude) : undefined,
+        longitude ? parseFloat(longitude) : undefined
       );
 
       res.status(200).json({
@@ -32,14 +31,17 @@ export class AttendanceController {
     }
   }
 
-  /**
-   * Mark check-out
-   */
   async checkOut(req: Request, res: Response): Promise<void> {
     try {
       const userId = req.user!.userId;
+      const { latitude, longitude } = req.body;
 
-      const attendance = await attendanceService.checkOut(userId, req.organizationId!);
+      const attendance = await attendanceService.checkOut(
+        userId,
+        req.organizationId!,
+        latitude ? parseFloat(latitude) : undefined,
+        longitude ? parseFloat(longitude) : undefined
+      );
 
       res.status(200).json({
         success: true,
@@ -56,9 +58,6 @@ export class AttendanceController {
     }
   }
 
-  /**
-   * Get today's attendance status
-   */
   async getTodayStatus(req: Request, res: Response): Promise<void> {
     try {
       const userId = req.user!.userId;
@@ -79,9 +78,6 @@ export class AttendanceController {
     }
   }
 
-  /**
-   * Get user's attendance history
-   */
   async getMyAttendance(req: Request, res: Response): Promise<void> {
     try {
       const userId = req.user!.userId;
@@ -111,9 +107,6 @@ export class AttendanceController {
     }
   }
 
-  /**
-   * Get user's attendance statistics
-   */
   async getMyStats(req: Request, res: Response): Promise<void> {
     try {
       const userId = req.user!.userId;
@@ -140,9 +133,6 @@ export class AttendanceController {
     }
   }
 
-  /**
-   * Get all attendance records (Admin/HR)
-   */
   async getAllAttendance(req: Request, res: Response): Promise<void> {
     try {
       const { date, startDate, endDate, status, department, page, limit } = req.query;
@@ -176,12 +166,9 @@ export class AttendanceController {
     }
   }
 
-  /**
-   * Get specific user's attendance (Admin/HR/Supervisor)
-   */
   async getUserAttendance(req: Request, res: Response): Promise<void> {
     try {
-      const { userId } = req.params;
+      const { userId } = req.params as { userId: string };
       const { startDate, endDate, page, limit } = req.query;
 
       const result = await attendanceService.getUserAttendance(

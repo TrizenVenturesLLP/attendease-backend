@@ -35,6 +35,8 @@ export interface UpdateUserData {
   department?: string;
   supervisorId?: string;
   employeeId?: string;
+  fieldTrackingEnabled?: boolean;
+  fieldTrackingIntervalMinutes?: number;
 }
 
 export interface UserFilters {

@@ -9,6 +9,7 @@ import organizationRoutes from './organization.routes';
 import dashboardRoutes from './dashboard.routes';
 import healthRoutes from './health.routes';
 import payrollRoutes from './payroll.routes';
+import fieldTrackingRoutes from './fieldTracking.routes';
 
 const router = Router();
 
@@ -24,5 +25,6 @@ router.use('/departments', departmentRoutes);
 router.use('/organizations', organizationRoutes);
 router.use('/dashboard', dashboardRoutes);
 router.use('/payroll', payrollRoutes);
+router.use('/field-tracking', fieldTrackingRoutes);
 
 export default router;

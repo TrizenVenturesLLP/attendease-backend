@@ -27,6 +27,8 @@ export interface IUser extends Document {
   employeeId?: string;
   isActive: boolean;
   createdBy?: mongoose.Types.ObjectId;
+  fieldTrackingEnabled: boolean;
+  fieldTrackingIntervalMinutes: number;
   // Microsoft authentication fields
   authProvider: AuthProvider;
   microsoftId?: string;
@@ -109,6 +111,14 @@ const UserSchema = new Schema<IUser>(
     createdBy: {
       type: Schema.Types.ObjectId,
       ref: 'User',
+    },
+    fieldTrackingEnabled: {
+      type: Boolean,
+      default: false,
+    },
+    fieldTrackingIntervalMinutes: {
+      type: Number,
+      default: 5,
     },
     // Microsoft authentication fields
     authProvider: {
