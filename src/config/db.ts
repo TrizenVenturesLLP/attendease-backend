@@ -40,8 +40,10 @@ const connectDB = async (): Promise<typeof mongoose.connection> => {
     logger.warn('⚠️ Detected malformed MongoDB URI, auto-fixing...');
   }
 
+  // Use MONGO_DB from .env (via config.mongoDbName). Do not default to another
+  // product DB — wrong dbName causes "Invalid email or password" for real users.
   const connectionOptions = {
-    dbName: process.env.MONGODB_DB || 'extrahand',
+    dbName: config.mongoDbName,
     serverSelectionTimeoutMS: 10000,
     connectTimeoutMS: 10000,
     socketTimeoutMS: 45000,

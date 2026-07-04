@@ -63,6 +63,10 @@ export interface ClientUser {
   gender?: string;
   phone?: string;
   profileComplete?: boolean;
+  /** Admin-set: field staff live tracking after check-in */
+  fieldTrackingEnabled?: boolean;
+  /** Minutes between location uploads (default 5) */
+  fieldTrackingIntervalMinutes?: number;
 }
 
 export interface LoginResult {
@@ -274,6 +278,7 @@ class AuthService {
     const fullName =
       (user as IUser).fullName || `${firstName} ${lastName}`.trim() || (user as IUser).email;
 
+    const intervalMinutes = (user as IUser).fieldTrackingIntervalMinutes;
     const clientUser: ClientUser = {
       id,
       _id: id,
@@ -296,6 +301,9 @@ class AuthService {
       gender: (user as IUser).gender,
       phone: (user as IUser).phone,
       profileComplete: resolveProfileComplete(user as IUser),
+      fieldTrackingEnabled: (user as IUser).fieldTrackingEnabled === true,
+      fieldTrackingIntervalMinutes:
+        typeof intervalMinutes === 'number' && intervalMinutes > 0 ? intervalMinutes : 5,
     };
 
     if (organizationId && role !== UserRole.SUPER_ADMIN) {
