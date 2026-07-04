@@ -25,9 +25,54 @@ function dayBoundsFromDateInput(dateInput: string | Date): { start: Date; end: D
 
 export class FieldTrackingService {
   /**
+   * Append a location point and refresh lastLocation on a session.
+   */
+  private async appendLocationPoint(
+    sessionId: any,
+    userId: string,
+    organizationId: string,
+    attendanceId: string,
+    latitude: number,
+    longitude: number,
+    accuracy?: number,
+    batteryLevel?: number,
+    recordedAt: Date = new Date()
+  ): Promise<void> {
+    await FieldLocationPoint.create({
+      organizationId,
+      userId,
+      sessionId,
+      attendanceId,
+      latitude,
+      longitude,
+      accuracy,
+      recordedAt,
+      receivedAt: new Date(),
+      batteryLevel,
+    });
+
+    await FieldTrackingSession.findByIdAndUpdate(sessionId, {
+      $set: {
+        lastLocation: {
+          latitude,
+          longitude,
+          accuracy,
+          recordedAt,
+          batteryLevel,
+        },
+      },
+      $inc: { pointCount: 1 },
+    });
+  }
+
+  /**
    * Start a tracking session when employee checks in.
    * Called automatically from attendanceService.checkIn (for fieldTrackingEnabled users).
    * Also exposed as a standalone API in case the app needs to call it separately.
+   *
+   * After admin force-stop, the same attendance must be able to go live again.
+   * We reopen the stopped session (or return the active one) instead of failing
+   * on "already exists" / unique-index conflicts.
    */
   async startSession(
     userId: string,
@@ -38,60 +83,155 @@ export class FieldTrackingService {
     accuracy?: number,
     batteryLevel?: number
   ): Promise<any> {
-    // Only start if user has fieldTrackingEnabled
     const user = await User.findById(userId).lean();
     if (!user) throw new Error('User not found');
     if (!user.fieldTrackingEnabled) {
       throw new Error('Field tracking is not enabled for this user');
     }
 
-    // Prevent duplicate active sessions
-    const existing = await FieldTrackingSession.findOne({
-      userId,
-      status: FieldTrackingStatus.ACTIVE,
-    });
-    if (existing) {
-      throw new Error('An active tracking session already exists. Please stop it before starting a new one.');
-    }
-
     const now = new Date();
-    const session = await FieldTrackingSession.create({
-      organizationId,
-      userId,
-      attendanceId,
-      date: startOfDay(now),
-      startedAt: now,
-      status: FieldTrackingStatus.ACTIVE,
-      lastLocation: {
-        latitude,
-        longitude,
-        accuracy,
-        recordedAt: now,
-        batteryLevel,
-      },
-      pointCount: 1,
-    });
-
-    // Immediately save the first location point
-    await FieldLocationPoint.create({
-      organizationId,
-      userId,
-      sessionId: session._id,
-      attendanceId,
+    const location = {
       latitude,
       longitude,
       accuracy,
       recordedAt: now,
-      receivedAt: now,
       batteryLevel,
-    });
+    };
 
-    // Link session to attendance record
-    await Attendance.findByIdAndUpdate(attendanceId, {
-      fieldTrackingSessionId: session._id,
+    // Already live — keep the session and refresh location (idempotent start).
+    const active = await FieldTrackingSession.findOne({
+      userId,
+      status: FieldTrackingStatus.ACTIVE,
     });
+    if (active) {
+      await this.appendLocationPoint(
+        active._id,
+        userId,
+        organizationId,
+        attendanceId,
+        latitude,
+        longitude,
+        accuracy,
+        batteryLevel,
+        now
+      );
+      await Attendance.findByIdAndUpdate(attendanceId, {
+        fieldTrackingSessionId: active._id,
+      });
+      return FieldTrackingSession.findById(active._id);
+    }
 
-    return session;
+    // Reopen a prior session for this attendance (force-stop / check-out) so a new
+    // insert cannot fail on unique indexes (userId+active, attendanceId, etc.).
+    const priorForAttendance = await FieldTrackingSession.findOne({
+      userId,
+      attendanceId,
+    }).sort({ startedAt: -1 });
+
+    if (priorForAttendance) {
+      const reopened = await FieldTrackingSession.findByIdAndUpdate(
+        priorForAttendance._id,
+        {
+          $set: {
+            status: FieldTrackingStatus.ACTIVE,
+            lastLocation: location,
+            organizationId,
+            attendanceId,
+          },
+          $unset: { endedAt: 1 },
+        },
+        { new: true }
+      );
+
+      await this.appendLocationPoint(
+        priorForAttendance._id,
+        userId,
+        organizationId,
+        attendanceId,
+        latitude,
+        longitude,
+        accuracy,
+        batteryLevel,
+        now
+      );
+      await Attendance.findByIdAndUpdate(attendanceId, {
+        fieldTrackingSessionId: priorForAttendance._id,
+      });
+      return reopened;
+    }
+
+    try {
+      const session = await FieldTrackingSession.create({
+        organizationId,
+        userId,
+        attendanceId,
+        date: startOfDay(now),
+        startedAt: now,
+        status: FieldTrackingStatus.ACTIVE,
+        lastLocation: location,
+        pointCount: 0,
+      });
+
+      await this.appendLocationPoint(
+        session._id,
+        userId,
+        organizationId,
+        attendanceId,
+        latitude,
+        longitude,
+        accuracy,
+        batteryLevel,
+        now
+      );
+
+      await Attendance.findByIdAndUpdate(attendanceId, {
+        fieldTrackingSessionId: session._id,
+      });
+
+      return session;
+    } catch (error: any) {
+      // Recover from unique-index races (e.g. production index stricter than schema).
+      const isDuplicate =
+        error?.code === 11000 || /duplicate key/i.test(String(error?.message || ''));
+      if (!isDuplicate) throw error;
+
+      const recovered = await FieldTrackingSession.findOne({ userId }).sort({
+        startedAt: -1,
+      });
+      if (!recovered) throw error;
+
+      const reopened = await FieldTrackingSession.findByIdAndUpdate(
+        recovered._id,
+        {
+          $set: {
+            status: FieldTrackingStatus.ACTIVE,
+            lastLocation: location,
+            organizationId,
+            attendanceId,
+            date: startOfDay(now),
+            startedAt: now,
+          },
+          $unset: { endedAt: 1 },
+        },
+        { new: true }
+      );
+
+      await this.appendLocationPoint(
+        recovered._id,
+        userId,
+        organizationId,
+        attendanceId,
+        latitude,
+        longitude,
+        accuracy,
+        batteryLevel,
+        now
+      );
+      await Attendance.findByIdAndUpdate(attendanceId, {
+        fieldTrackingSessionId: recovered._id,
+      });
+      return reopened;
+    }
   }
 
   /**

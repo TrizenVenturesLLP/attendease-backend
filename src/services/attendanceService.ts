@@ -274,13 +274,16 @@ export class AttendanceService {
 
     const enriched = await enrichAttendancePhoto(attendance.toObject() as unknown as Record<string, unknown>);
 
-    // Auto-start field tracking session if enabled for this user
+    // Auto-start field tracking when enabled. Requires GPS on the check-in body
+    // (mobile sends lat/lng for fieldTrackingEnabled users). Website check-in
+    // does not send GPS, so no session is created there — mobile must start it.
     let fieldTrackingStarted = false;
+    let fieldTrackingSessionId: string | undefined;
     if (geoPoint) {
       try {
         const trackingUser = await User.findById(userId).select('fieldTrackingEnabled').lean();
         if (trackingUser?.fieldTrackingEnabled) {
-          await fieldTrackingService.startSession(
+          const session = await fieldTrackingService.startSession(
             userId,
             organizationId,
             (attendance._id as any).toString(),
@@ -288,6 +291,7 @@ export class AttendanceService {
             geoPoint.longitude
           );
           fieldTrackingStarted = true;
+          fieldTrackingSessionId = (session?._id ?? session?.id)?.toString();
         }
       } catch (trackingError: any) {
         // Tracking failure must never block check-in
@@ -295,7 +299,11 @@ export class AttendanceService {
       }
     }
 
-    return { ...((enriched ?? {}) as object), fieldTrackingStarted };
+    return {
+      ...((enriched ?? {}) as object),
+      fieldTrackingStarted,
+      ...(fieldTrackingSessionId ? { fieldTrackingSessionId } : {}),
+    };
   }
 
   async checkOut(
