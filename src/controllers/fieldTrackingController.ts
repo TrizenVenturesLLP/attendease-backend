@@ -224,10 +224,11 @@ export class FieldTrackingController {
         return;
       }
 
+      // Pass YYYY-MM-DD string through — service parses as local calendar day.
       const result = await fieldTrackingService.getDayPath(
         userId as string,
         req.organizationId!,
-        new Date(date as string)
+        String(date)
       );
 
       res.status(200).json({
@@ -256,7 +257,7 @@ export class FieldTrackingController {
         req.organizationId!,
         {
           userId: userId as string | undefined,
-          date: date ? new Date(date as string) : undefined,
+          date: date ? String(date) : undefined,
           status: status as FieldTrackingStatus | undefined,
         },
         page ? parseInt(page as string) : 1,

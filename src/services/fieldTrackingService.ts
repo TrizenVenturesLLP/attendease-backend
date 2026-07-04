@@ -4,6 +4,25 @@ import FieldLocationPoint from '../models/FieldLocationPoint';
 import Attendance from '../models/Attendance';
 import User from '../models/User';
 
+/**
+ * Parse a calendar day for history queries.
+ * Avoid `new Date('YYYY-MM-DD')` (UTC midnight) which can miss local-day sessions.
+ */
+function dayBoundsFromDateInput(dateInput: string | Date): { start: Date; end: Date } {
+  if (typeof dateInput === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(dateInput.trim())) {
+    const [y, m, d] = dateInput.trim().split('-').map(Number);
+    const start = new Date(y, m - 1, d, 0, 0, 0, 0);
+    const end = new Date(y, m - 1, d, 23, 59, 59, 999);
+    return { start, end };
+  }
+
+  const base = dateInput instanceof Date ? dateInput : new Date(dateInput);
+  const start = startOfDay(base);
+  const end = new Date(start);
+  end.setHours(23, 59, 59, 999);
+  return { start, end };
+}
+
 export class FieldTrackingService {
   /**
    * Start a tracking session when employee checks in.
@@ -211,21 +230,23 @@ export class FieldTrackingService {
 
   /**
    * Admin/Employee: Get the day path history for a specific user and date.
+   * Includes force_stopped / completed sessions — history is never deleted on stop.
    */
   async getDayPath(
     userId: string,
     organizationId: string,
-    date: Date
+    date: string | Date
   ): Promise<any> {
-    const start = startOfDay(date);
-    const end = new Date(start);
-    end.setHours(23, 59, 59, 999);
+    const { start, end } = dayBoundsFromDateInput(date);
 
-    // Find all sessions for that day
+    // Match by session.date or startedAt so timezone edge cases still return history.
     const sessions = await FieldTrackingSession.find({
       userId,
       organizationId,
-      date: { $gte: start, $lte: end },
+      $or: [
+        { date: { $gte: start, $lte: end } },
+        { startedAt: { $gte: start, $lte: end } },
+      ],
     })
       .sort({ startedAt: 1 })
       .lean();
@@ -234,10 +255,9 @@ export class FieldTrackingService {
 
     const sessionIds = sessions.map((s: any) => s._id);
 
-    // Get all points for those sessions sorted by time
+    // All points for those sessions (do not re-filter by recordedAt — force-stop must not hide history).
     const points = await FieldLocationPoint.find({
       sessionId: { $in: sessionIds },
-      recordedAt: { $gte: start, $lte: end },
     })
       .sort({ recordedAt: 1 })
       .lean();
@@ -252,7 +272,7 @@ export class FieldTrackingService {
     organizationId: string,
     filters: {
       userId?: string;
-      date?: Date;
+      date?: string | Date;
       status?: FieldTrackingStatus;
     },
     page: number = 1,
@@ -263,10 +283,11 @@ export class FieldTrackingService {
     if (filters.userId) query.userId = filters.userId;
     if (filters.status) query.status = filters.status;
     if (filters.date) {
-      const start = startOfDay(filters.date);
-      const end = new Date(start);
-      end.setHours(23, 59, 59, 999);
-      query.date = { $gte: start, $lte: end };
+      const { start, end } = dayBoundsFromDateInput(filters.date);
+      query.$or = [
+        { date: { $gte: start, $lte: end } },
+        { startedAt: { $gte: start, $lte: end } },
+      ];
     }
 
     const skip = (page - 1) * limit;
