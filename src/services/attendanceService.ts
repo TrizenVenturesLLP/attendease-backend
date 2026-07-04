@@ -21,6 +21,9 @@ import {
 } from '../utils/attendanceAbsence';
 import { attendanceResolver, mapResolvedToAttendanceStatus } from './attendanceResolver';
 import { shiftService } from './shiftService';
+import { FieldTrackingService } from './fieldTrackingService';
+
+const fieldTrackingService = new FieldTrackingService();
 
 type GeoPoint = {
   latitude: number;
@@ -269,7 +272,30 @@ export class AttendanceService {
       }
     }
 
-    return enrichAttendancePhoto(attendance.toObject() as unknown as Record<string, unknown>);
+    const enriched = await enrichAttendancePhoto(attendance.toObject() as unknown as Record<string, unknown>);
+
+    // Auto-start field tracking session if enabled for this user
+    let fieldTrackingStarted = false;
+    if (geoPoint) {
+      try {
+        const trackingUser = await User.findById(userId).select('fieldTrackingEnabled').lean();
+        if (trackingUser?.fieldTrackingEnabled) {
+          await fieldTrackingService.startSession(
+            userId,
+            organizationId,
+            (attendance._id as any).toString(),
+            geoPoint.latitude,
+            geoPoint.longitude
+          );
+          fieldTrackingStarted = true;
+        }
+      } catch (trackingError: any) {
+        // Tracking failure must never block check-in
+        console.error('Auto field tracking start failed (non-critical):', trackingError.message);
+      }
+    }
+
+    return { ...((enriched ?? {}) as object), fieldTrackingStarted };
   }
 
   async checkOut(
@@ -315,7 +341,20 @@ export class AttendanceService {
     attendance.status = mapResolvedToAttendanceStatus(resolved.attendanceStatus);
     await attendance.save();
 
-    return attendance;
+    // Auto-stop field tracking session if one is active
+    let fieldTrackingStopped = false;
+    try {
+      const trackingUser = await User.findById(userId).select('fieldTrackingEnabled').lean();
+      if (trackingUser?.fieldTrackingEnabled) {
+        await fieldTrackingService.stopSession(userId, organizationId);
+        fieldTrackingStopped = true;
+      }
+    } catch (trackingError: any) {
+      // Tracking failure must never block check-out
+      console.error('Auto field tracking stop failed (non-critical):', trackingError.message);
+    }
+
+    return { ...attendance.toObject(), fieldTrackingStopped };
   }
 
   async getTodayStatus(userId: string, organizationId: string): Promise<any> {
