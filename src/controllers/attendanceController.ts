@@ -8,12 +8,14 @@ export class AttendanceController {
   async checkIn(req: Request, res: Response): Promise<void> {
     try {
       const userId = req.user!.userId;
-      const { photoData } = req.body;
+      const { photoData, latitude, longitude } = req.body;
 
       const attendance = await attendanceService.checkIn(
         userId,
         req.organizationId!,
-        photoData
+        photoData,
+        latitude ? parseFloat(latitude) : undefined,
+        longitude ? parseFloat(longitude) : undefined
       );
 
       res.status(200).json({
@@ -34,7 +36,14 @@ export class AttendanceController {
   async checkOut(req: Request, res: Response): Promise<void> {
     try {
       const userId = req.user!.userId;
-      const attendance = await attendanceService.checkOut(userId, req.organizationId!);
+      const { latitude, longitude } = req.body;
+
+      const attendance = await attendanceService.checkOut(
+        userId,
+        req.organizationId!,
+        latitude ? parseFloat(latitude) : undefined,
+        longitude ? parseFloat(longitude) : undefined
+      );
 
       res.status(200).json({
         success: true,
@@ -192,7 +201,7 @@ export class AttendanceController {
 
   async getUserAttendance(req: Request, res: Response): Promise<void> {
     try {
-      const { userId } = req.params;
+      const { userId } = req.params as { userId: string };
       const { startDate, endDate, page, limit } = req.query;
 
       if (req.user!.role === UserRole.SUPERVISOR) {

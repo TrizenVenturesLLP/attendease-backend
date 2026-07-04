@@ -16,6 +16,7 @@ import leaveTypeRoutes from './leaveType.routes';
 import leavePolicyRoutes from './leavePolicy.routes';
 import approvalWorkflowRoutes from './approvalWorkflow.routes';
 import platformRoutes from './platform.routes';
+import fieldTrackingRoutes from './fieldTracking.routes';
 
 const router = Router();
 
@@ -38,5 +39,6 @@ router.use('/leave-types', leaveTypeRoutes);
 router.use('/leave-policies', leavePolicyRoutes);
 router.use('/approval-workflows', approvalWorkflowRoutes);
 router.use('/platform', platformRoutes);
+router.use('/field-tracking', fieldTrackingRoutes);
 
 export default router;

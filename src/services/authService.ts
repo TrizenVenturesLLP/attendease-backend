@@ -71,6 +71,19 @@ export interface LoginResult {
 }
 
 class AuthService {
+  private normalizeEmail(email: string): string {
+    return email.trim().toLowerCase();
+  }
+
+  private createCaseInsensitiveEmailQuery(email: string): Record<string, unknown> {
+    const normalizedEmail = this.normalizeEmail(email);
+    const escapedEmail = normalizedEmail.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+    return {
+      email: { $regex: `^${escapedEmail}$`, $options: 'i' },
+    };
+  }
+
   /**
    * Authenticate user with email and password (local auth)
    */
@@ -104,6 +117,10 @@ class AuthService {
       }
       user = candidates[0] || null;
     }
+    const emailQuery = this.createCaseInsensitiveEmailQuery(email);
+
+    // Find user and include password field
+    const user = await User.findOne({ ...emailQuery, isActive: true }).select('+password');
 
     if (!user) {
       throw new UnauthorizedError('Invalid email or password');
@@ -386,10 +403,11 @@ class AuthService {
       );
     }
 
-    const normalizedEmail = email.trim().toLowerCase();
+    const normalizedEmail = this.normalizeEmail(email);
+    const escapedEmail = normalizedEmail.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
     const user = await User.findOne({
-      email: normalizedEmail,
+      email: { $regex: `^${escapedEmail}$`, $options: 'i' },
       organizationId,
     }).select('+password');
 

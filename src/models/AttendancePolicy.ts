@@ -31,6 +31,27 @@ export const ALL_WEEK_DAYS: WeekDay[] = [
   WeekDay.SUN,
 ];
 
+  MON = 'MON', TUE = 'TUE', WED = 'WED', THU = 'THU',
+  FRI = 'FRI', SAT = 'SAT', SUN = 'SUN',
+}
+
+export const ALL_WEEK_DAYS: WeekDay[] = [
+  WeekDay.MON, WeekDay.TUE, WeekDay.WED, WeekDay.THU,
+  WeekDay.FRI, WeekDay.SAT, WeekDay.SUN,
+];
+
+export enum GeofenceEnforcementMode {
+  BLOCK = 'BLOCK',
+  FLAG = 'FLAG',
+  DISABLED = 'DISABLED',
+}
+
+export interface GeofenceConfig {
+  enabled: boolean;
+  officeLocationIds: mongoose.Types.ObjectId[];
+  enforcementMode: GeofenceEnforcementMode;
+}
+
 export interface DayTimingRule {
   startTime?: string;
   endTime?: string;
@@ -53,6 +74,7 @@ export interface IAttendancePolicy extends Document {
   allowRegularization: boolean;
   isDefault: boolean;
   status: PolicyStatus;
+  geofence: GeofenceConfig;
   createdBy?: mongoose.Types.ObjectId;
   updatedBy?: mongoose.Types.ObjectId;
   createdAt: Date;
@@ -68,6 +90,19 @@ const WeekRuleSchema = new Schema(
     endTime: { type: String, match: /^([01]\d|2[0-3]):[0-5]\d$/ },
     expectedHours: { type: Number, min: 0, max: 24 },
     graceMinutes: { type: Number, min: 0, max: 120 },
+  },
+  { _id: false }
+);
+
+const GeofenceConfigSchema = new Schema<GeofenceConfig>(
+  {
+    enabled: { type: Boolean, default: false },
+    officeLocationIds: [{ type: Schema.Types.ObjectId, ref: 'OfficeLocation' }],
+    enforcementMode: {
+      type: String,
+      enum: Object.values(GeofenceEnforcementMode),
+      default: GeofenceEnforcementMode.DISABLED,
+    },
   },
   { _id: false }
 );
@@ -109,6 +144,11 @@ const AttendancePolicySchema = new Schema<IAttendancePolicy>(
       type: String,
       enum: Object.values(PolicyStatus),
       default: PolicyStatus.ACTIVE,
+    },
+    geofence: {
+      type: GeofenceConfigSchema,
+      required: true,
+      default: () => ({ enabled: false, officeLocationIds: [], enforcementMode: GeofenceEnforcementMode.DISABLED }),
     },
     createdBy: { type: Schema.Types.ObjectId, ref: 'User' },
     updatedBy: { type: Schema.Types.ObjectId, ref: 'User' },

@@ -49,6 +49,8 @@ export interface UpdateUserData {
   leavePolicyId?: string;
   payrollPolicyId?: string;
   joiningDate?: Date | string;
+  fieldTrackingEnabled?: boolean;
+  fieldTrackingIntervalMinutes?: number;
 }
 
 export interface UserFilters {

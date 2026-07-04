@@ -12,6 +12,7 @@ export enum RegularizationRequestType {
   MISSED_CHECK_OUT = 'missed_check_out',
   INCORRECT_TIMING = 'incorrect_timing',
   ATTENDANCE_CORRECTION = 'attendance_correction',
+  LOCATION_OUT_OF_RANGE = 'location_out_of_range',
 }
 
 export interface IAttendanceRegularization extends Document {
@@ -27,6 +28,10 @@ export interface IAttendanceRegularization extends Document {
   reviewedBy?: mongoose.Types.ObjectId;
   reviewedAt?: Date;
   reviewNotes?: string;
+  flaggedDistance?: number;
+  flaggedLat?: number;
+  flaggedLng?: number;
+  isSystemGenerated?: boolean;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -88,6 +93,24 @@ const AttendanceRegularizationSchema = new Schema<IAttendanceRegularization>(
       type: String,
       maxlength: 500,
       trim: true,
+    },
+    flaggedDistance: {
+      type: Number,
+      min: 0,
+    },
+    flaggedLat: {
+      type: Number,
+      min: -90,
+      max: 90,
+    },
+    flaggedLng: {
+      type: Number,
+      min: -180,
+      max: 180,
+    },
+    isSystemGenerated: {
+      type: Boolean,
+      default: false,
     },
   },
   { timestamps: true }
