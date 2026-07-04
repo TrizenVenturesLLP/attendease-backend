@@ -96,18 +96,19 @@ class AuthService {
       throw new BadRequestError('Email and password are required');
     }
 
+    const emailQuery = this.createCaseInsensitiveEmailQuery(email);
     let user: IUser | null = null;
 
     if (organizationId) {
       // Tenant-scoped login: resolve user only within this organization
       user = await User.findOne({
-        email,
+        ...emailQuery,
         isActive: true,
         organizationId,
       }).select('+password');
     } else {
       // Platform login: if email exists in multiple orgs, require tenant URL
-      const candidates = await User.find({ email, isActive: true })
+      const candidates = await User.find({ ...emailQuery, isActive: true })
         .select('+password')
         .limit(3);
       if (candidates.length > 1) {
@@ -117,10 +118,6 @@ class AuthService {
       }
       user = candidates[0] || null;
     }
-    const emailQuery = this.createCaseInsensitiveEmailQuery(email);
-
-    // Find user and include password field
-    const user = await User.findOne({ ...emailQuery, isActive: true }).select('+password');
 
     if (!user) {
       throw new UnauthorizedError('Invalid email or password');

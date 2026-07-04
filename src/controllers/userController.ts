@@ -505,6 +505,11 @@ class UserController {
         data: user,
         timestamp: new Date().toISOString(),
       });
+    } catch (error) {
+      next(error);
+    }
+  }
+
   /**
    * @route   PATCH /api/users/:id/field-tracking
    * @desc    Enable or disable field tracking for a user

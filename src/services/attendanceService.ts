@@ -1,10 +1,19 @@
-import Attendance, { AttendanceStatus } from '../models/Attendance';
+import mongoose from 'mongoose';
+import Attendance, { AttendanceStatus, LocationStatus } from '../models/Attendance';
+import AttendancePolicy, { GeofenceEnforcementMode } from '../models/AttendancePolicy';
+import AttendanceRegularization, {
+  RegularizationRequestType,
+  RegularizationStatus,
+} from '../models/AttendanceRegularization';
+import OfficeLocation from '../models/OfficeLocation';
 import Leave, { LeaveStatus } from '../models/Leave';
 import User, { UserRole } from '../models/User';
 import { startOfDay, endOfDay, format } from 'date-fns';
 import { checkInMinioStorage } from '../utils/storage/MinIOStorage';
 import { parseTimeOnDate } from '../utils/organizationSettings';
 import { getNonWorkingHolidayDateKeys } from '../utils/workingDays';
+import { haversineDistance } from '../utils/geoUtils';
+import { BadRequestError } from '../utils/AppError';
 import {
   buildImpliedAbsentRecords,
   computeUserAttendanceStats,
@@ -12,6 +21,11 @@ import {
 } from '../utils/attendanceAbsence';
 import { attendanceResolver, mapResolvedToAttendanceStatus } from './attendanceResolver';
 import { shiftService } from './shiftService';
+
+type GeoPoint = {
+  latitude: number;
+  longitude: number;
+};
 
 const CHECKIN_PHOTO_TTL_SEC = 86400;
 
@@ -41,23 +55,7 @@ async function enrichAttendancePhotos<T extends Record<string, unknown>>(records
     return record;
   });
   return Promise.all(withKeys.map(r => enrichAttendancePhoto(r).then(x => x ?? r)));
-import mongoose from 'mongoose';
-import Attendance, { AttendanceStatus, LocationStatus } from '../models/Attendance';
-import AttendancePolicy, { GeofenceEnforcementMode } from '../models/AttendancePolicy';
-import AttendanceRegularization, {
-  RegularizationRequestType,
-  RegularizationStatus,
-} from '../models/AttendanceRegularization';
-import OfficeLocation from '../models/OfficeLocation';
-import { startOfDay, endOfDay } from 'date-fns';
-import { minioStorage } from '../utils/storage/MinIOStorage';
-import { haversineDistance } from '../utils/geoUtils';
-import { BadRequestError } from '../utils/AppError';
-
-type GeoPoint = {
-  latitude: number;
-  longitude: number;
-};
+}
 
 async function resolveAttendancePolicy(
   organizationId: string
@@ -200,13 +198,7 @@ export class AttendanceService {
 
     // Upload photo to MinIO if provided
     let photoKey: string | undefined;
-    const now = new Date();
-    const workStartTime = new Date(today);
-    workStartTime.setHours(9, 0, 0);
 
-    const status = now > workStartTime ? AttendanceStatus.LATE : AttendanceStatus.PRESENT;
-
-    let photoUrl: string | undefined;
     if (photoData) {
       try {
         const base64Data = photoData.replace(/^data:image\/\w+;base64,/, '');
@@ -221,10 +213,6 @@ export class AttendanceService {
         const month = String(now.getMonth() + 1).padStart(2, '0');
         const day = String(now.getDate()).padStart(2, '0');
         const folder = `org-${organizationId}/${year}/${month}/${day}`;
-        const year = now.getFullYear();
-        const month = String(now.getMonth() + 1).padStart(2, '0');
-        const day = String(now.getDate()).padStart(2, '0');
-        const folder = `attendance-photos/${year}/${month}/${day}`;
 
         const fileName = `${userId}_checkin_${now.getTime()}.jpg`;
         const result = await checkInMinioStorage.uploadFile(
@@ -239,10 +227,6 @@ export class AttendanceService {
       } catch (uploadError: any) {
         console.error('Failed to upload check-in photo:', uploadError.message);
         photoKey = undefined;
-        photoUrl = result.url;
-      } catch (uploadError: any) {
-        console.error('Failed to upload photo:', uploadError.message);
-        photoUrl = undefined;
       }
     }
 
@@ -258,10 +242,6 @@ export class AttendanceService {
       checkIn: now,
       status,
       photoKey,
-    });
-
-    return enrichAttendancePhoto(attendance.toObject() as unknown as Record<string, unknown>);
-      photoUrl,
       officeLocationId: geofenceResult.officeLocationId,
       checkInLat: geoPoint?.latitude,
       checkInLng: geoPoint?.longitude,
@@ -269,9 +249,7 @@ export class AttendanceService {
       locationStatus: geofenceResult.locationStatus,
     });
 
-    if (
-      geofenceResult.locationStatus === LocationStatus.OUT_OF_RANGE
-    ) {
+    if (geofenceResult.locationStatus === LocationStatus.OUT_OF_RANGE) {
       try {
         await AttendanceRegularization.create({
           organizationId,
@@ -291,7 +269,7 @@ export class AttendanceService {
       }
     }
 
-    return attendance;
+    return enrichAttendancePhoto(attendance.toObject() as unknown as Record<string, unknown>);
   }
 
   async checkOut(

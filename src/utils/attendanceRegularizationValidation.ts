@@ -6,6 +6,7 @@ export const REQUEST_TYPE_LABELS: Record<RegularizationRequestType, string> = {
   [RegularizationRequestType.MISSED_CHECK_OUT]: 'Missed Check-Out',
   [RegularizationRequestType.INCORRECT_TIMING]: 'Incorrect Timing',
   [RegularizationRequestType.ATTENDANCE_CORRECTION]: 'Attendance Correction',
+  [RegularizationRequestType.LOCATION_OUT_OF_RANGE]: 'Location Out of Range',
 };
 
 export type RegularizationCreatePayload = {

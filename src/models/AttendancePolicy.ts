@@ -31,15 +31,6 @@ export const ALL_WEEK_DAYS: WeekDay[] = [
   WeekDay.SUN,
 ];
 
-  MON = 'MON', TUE = 'TUE', WED = 'WED', THU = 'THU',
-  FRI = 'FRI', SAT = 'SAT', SUN = 'SUN',
-}
-
-export const ALL_WEEK_DAYS: WeekDay[] = [
-  WeekDay.MON, WeekDay.TUE, WeekDay.WED, WeekDay.THU,
-  WeekDay.FRI, WeekDay.SAT, WeekDay.SUN,
-];
-
 export enum GeofenceEnforcementMode {
   BLOCK = 'BLOCK',
   FLAG = 'FLAG',

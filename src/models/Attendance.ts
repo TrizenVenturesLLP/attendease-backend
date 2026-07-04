@@ -33,8 +33,6 @@ export interface IAttendance extends Document {
   approvedBy?: mongoose.Types.ObjectId;
   photoUrl?: string; // Presigned or legacy public URL for clients
   photoKey?: string; // MinIO object key in check-in bucket
-  photoUrl?: string;
-  photoKey?: string;
   officeLocationId?: mongoose.Types.ObjectId;
   fieldTrackingSessionId?: mongoose.Types.ObjectId;
   checkInLat?: number;
