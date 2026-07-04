@@ -1,8 +1,11 @@
 import { birthdayNotificationService } from '../services/birthdayNotificationService';
 import { logger } from '../utils/logger';
 
-let intervalHandle: ReturnType<typeof setInterval> | null = null;
-let lastRunDayKey: string | null = null;
+const MS_PER_DAY = 24 * 60 * 60 * 1000;
+
+let dailyIntervalHandle: ReturnType<typeof setInterval> | null = null;
+let nextRunTimeoutHandle: ReturnType<typeof setTimeout> | null = null;
+let startupRunTimeoutHandle: ReturnType<typeof setTimeout> | null = null;
 
 function getRunHour(): number {
   const parsed = parseInt(process.env.BIRTHDAY_EMAIL_HOUR || '8', 10);
@@ -12,22 +15,42 @@ function getRunHour(): number {
   return Math.min(23, Math.max(0, parsed));
 }
 
-async function runIfDue(force = false): Promise<void> {
-  const now = new Date();
-  const dayKey = now.toISOString().slice(0, 10);
+function msUntilNextRun(reference = new Date()): number {
   const hour = getRunHour();
-
-  if (!force && (now.getHours() !== hour || lastRunDayKey === dayKey)) {
-    return;
+  const next = new Date(reference);
+  next.setHours(hour, 0, 0, 0);
+  if (next <= reference) {
+    next.setDate(next.getDate() + 1);
   }
+  return next.getTime() - reference.getTime();
+}
 
-  lastRunDayKey = dayKey;
+async function runDailyBirthdayEmails(): Promise<void> {
   await birthdayNotificationService.sendDailyBirthdayEmails();
 }
 
+function scheduleDailyRuns(): void {
+  nextRunTimeoutHandle = setTimeout(() => {
+    void runDailyBirthdayEmails().catch((error) => {
+      logger.error('Daily birthday email run failed', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
+
+    dailyIntervalHandle = setInterval(() => {
+      void runDailyBirthdayEmails().catch((error) => {
+        logger.error('Daily birthday email run failed', {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+    }, MS_PER_DAY);
+  }, msUntilNextRun());
+}
+
 /**
- * Checks every minute whether it is time to send daily birthday emails.
- * Default run hour: 08:00 server local time (override with BIRTHDAY_EMAIL_HOUR).
+ * Sends birthday emails once per day at BIRTHDAY_EMAIL_HOUR (default 08:00 server time).
+ * Users who complete their profile on their birthday after that time still receive
+ * an immediate email from the profile-completion flow.
  */
 export function startBirthdayEmailScheduler(): void {
   if (process.env.BIRTHDAY_EMAIL_SCHEDULER === 'false') {
@@ -36,28 +59,37 @@ export function startBirthdayEmailScheduler(): void {
   }
 
   const hour = getRunHour();
-  logger.info('Birthday email scheduler started', { runHour: hour });
+  const delayMs = msUntilNextRun();
+  logger.info('Birthday email scheduler started', {
+    runHour: hour,
+    frequency: 'once per day',
+    nextRunInMinutes: Math.round(delayMs / 60_000),
+  });
 
   if (process.env.BIRTHDAY_EMAIL_RUN_ON_STARTUP === 'true') {
-    void runIfDue(true).catch((error) => {
-      logger.error('Startup birthday email run failed', {
-        error: error instanceof Error ? error.message : String(error),
+    startupRunTimeoutHandle = setTimeout(() => {
+      void runDailyBirthdayEmails().catch((error) => {
+        logger.error('Startup birthday email run failed', {
+          error: error instanceof Error ? error.message : String(error),
+        });
       });
-    });
+    }, 10_000);
   }
 
-  intervalHandle = setInterval(() => {
-    void runIfDue().catch((error) => {
-      logger.error('Scheduled birthday email run failed', {
-        error: error instanceof Error ? error.message : String(error),
-      });
-    });
-  }, 60_000);
+  scheduleDailyRuns();
 }
 
 export function stopBirthdayEmailScheduler(): void {
-  if (intervalHandle) {
-    clearInterval(intervalHandle);
-    intervalHandle = null;
+  if (startupRunTimeoutHandle) {
+    clearTimeout(startupRunTimeoutHandle);
+    startupRunTimeoutHandle = null;
+  }
+  if (nextRunTimeoutHandle) {
+    clearTimeout(nextRunTimeoutHandle);
+    nextRunTimeoutHandle = null;
+  }
+  if (dailyIntervalHandle) {
+    clearInterval(dailyIntervalHandle);
+    dailyIntervalHandle = null;
   }
 }

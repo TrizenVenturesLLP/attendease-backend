@@ -429,14 +429,14 @@ class EmailNotificationService {
   }): Promise<void> {
     if (!this.isEmailConfigured()) {
       this.warnEmailSkipped('birthday');
-      return;
+      throw new Error('Email service not configured (EMAIL_SERVICE_URL)');
     }
 
     const endpoint = `${config.emailService.url}/api/v1/email/birthday`;
 
     if (!config.emailService.authToken) {
       logger.warn('Birthday email skipped: EMAIL_SERVICE_AUTH_TOKEN not set');
-      return;
+      throw new Error('Email service auth token not configured');
     }
 
     try {

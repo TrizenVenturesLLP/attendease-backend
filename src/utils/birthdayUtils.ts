@@ -30,3 +30,23 @@ export function formatUserDisplayName(user: {
   const fromParts = `${user.firstName || ''} ${user.lastName || ''}`.trim();
   return user.fullName?.trim() || fromParts || user.email || 'A colleague';
 }
+
+/** True when an ISO date key (YYYY-MM-DD) falls on today's calendar day (server local). */
+export function dateKeyIsToday(dateKey: string, reference = new Date()): boolean {
+  const normalized = dateKey.length >= 10 ? dateKey.slice(0, 10) : dateKey;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(normalized)) {
+    return false;
+  }
+  const [, month, day] = normalized.split('-').map(Number);
+  const { month: todayMonth, day: todayDay } = getTodayMonthDay(reference);
+  return month === todayMonth && day === todayDay;
+}
+
+/** True when the given date of birth falls on today's calendar day (server local time). */
+export function isBirthdayToday(dateOfBirth: Date, reference = new Date()): boolean {
+  const dob = dateOfBirth instanceof Date ? dateOfBirth : new Date(dateOfBirth);
+  if (Number.isNaN(dob.getTime())) {
+    return false;
+  }
+  return dob.getMonth() === reference.getMonth() && dob.getDate() === reference.getDate();
+}

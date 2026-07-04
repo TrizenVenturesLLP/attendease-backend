@@ -15,6 +15,9 @@ import {
 import { JwtPayload } from '../utils/ApiResponse';
 import { profileMinioStorage } from '../utils/storage/MinIOStorage';
 import demoInvitationService from './demoInvitationService';
+import { birthdayNotificationService } from './birthdayNotificationService';
+import { dateKeyIsToday } from '../utils/birthdayUtils';
+import { logger } from '../utils/logger';
 import {
   validateOrgInvitation as validateOrgInvitationLink,
   markInvitationAccepted,
@@ -461,6 +464,15 @@ class AuthService {
     user.phone = phone;
     user.profileComplete = true;
     await user.save();
+
+    if (dateKeyIsToday(data.dateOfBirth)) {
+      void birthdayNotificationService.sendBirthdayEmailForUser(userId).catch((error) => {
+        logger.error('Birthday email after profile completion failed', {
+          userId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+    }
 
     return this.formatClientUser(user);
   }
