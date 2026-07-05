@@ -1,4 +1,5 @@
 import { startOfDay } from 'date-fns';
+import mongoose from 'mongoose';
 import FieldTrackingSession, { FieldTrackingStatus } from '../models/FieldTrackingSession';
 import FieldLocationPoint from '../models/FieldLocationPoint';
 import Attendance from '../models/Attendance';
@@ -24,6 +25,88 @@ function dayBoundsFromDateInput(dateInput: string | Date): { start: Date; end: D
 }
 
 export class FieldTrackingService {
+  private toObjectId(id: string): mongoose.Types.ObjectId | string {
+    return mongoose.Types.ObjectId.isValid(id) ? new mongoose.Types.ObjectId(id) : id;
+  }
+
+  /**
+   * After admin force-stop or check-out, find the session to reopen for this user.
+   * Scoped to one user only — never affects other employees.
+   */
+  private async findReopenableSession(
+    userId: string,
+    organizationId: string,
+    attendanceId: string
+  ): Promise<any | null> {
+    const attendanceOid = this.toObjectId(attendanceId);
+
+    const forAttendance = await FieldTrackingSession.findOne({
+      userId,
+      attendanceId: attendanceOid,
+      status: { $in: [FieldTrackingStatus.FORCE_STOPPED, FieldTrackingStatus.COMPLETED] },
+    })
+      .sort({ startedAt: -1 })
+      .lean();
+
+    if (forAttendance) {
+      return forAttendance;
+    }
+
+    const { start, end } = dayBoundsFromDateInput(new Date());
+    return FieldTrackingSession.findOne({
+      userId,
+      organizationId,
+      status: { $in: [FieldTrackingStatus.FORCE_STOPPED, FieldTrackingStatus.COMPLETED] },
+      startedAt: { $gte: start, $lte: end },
+    })
+      .sort({ startedAt: -1 })
+      .lean();
+  }
+
+  private async reopenSession(
+    sessionId: mongoose.Types.ObjectId | string,
+    userId: string,
+    organizationId: string,
+    attendanceId: string,
+    location: {
+      latitude: number;
+      longitude: number;
+      accuracy?: number;
+      recordedAt: Date;
+      batteryLevel?: number;
+    }
+  ): Promise<any> {
+    const reopened = await FieldTrackingSession.findByIdAndUpdate(
+      sessionId,
+      {
+        $set: {
+          status: FieldTrackingStatus.ACTIVE,
+          lastLocation: location,
+          organizationId,
+          attendanceId: this.toObjectId(attendanceId),
+        },
+        $unset: { endedAt: 1 },
+      },
+      { new: true }
+    );
+
+    await this.appendLocationPoint(
+      sessionId,
+      userId,
+      organizationId,
+      attendanceId,
+      location.latitude,
+      location.longitude,
+      location.accuracy,
+      location.batteryLevel,
+      location.recordedAt
+    );
+    await Attendance.findByIdAndUpdate(attendanceId, {
+      fieldTrackingSessionId: sessionId,
+    });
+    return reopened;
+  }
+
   /**
    * Append a location point and refresh lastLocation on a session.
    */
@@ -121,43 +204,21 @@ export class FieldTrackingService {
       return FieldTrackingSession.findById(active._id);
     }
 
-    // Reopen a prior session for this attendance (force-stop / check-out) so a new
-    // insert cannot fail on unique indexes (userId+active, attendanceId, etc.).
-    const priorForAttendance = await FieldTrackingSession.findOne({
+    // Reopen this user's force-stopped / completed session (admin force-stop is per employee only).
+    const priorForAttendance = await this.findReopenableSession(
       userId,
-      attendanceId,
-    }).sort({ startedAt: -1 });
+      organizationId,
+      attendanceId
+    );
 
     if (priorForAttendance) {
-      const reopened = await FieldTrackingSession.findByIdAndUpdate(
-        priorForAttendance._id,
-        {
-          $set: {
-            status: FieldTrackingStatus.ACTIVE,
-            lastLocation: location,
-            organizationId,
-            attendanceId,
-          },
-          $unset: { endedAt: 1 },
-        },
-        { new: true }
-      );
-
-      await this.appendLocationPoint(
+      return this.reopenSession(
         priorForAttendance._id,
         userId,
         organizationId,
         attendanceId,
-        latitude,
-        longitude,
-        accuracy,
-        batteryLevel,
-        now
+        location
       );
-      await Attendance.findByIdAndUpdate(attendanceId, {
-        fieldTrackingSessionId: priorForAttendance._id,
-      });
-      return reopened;
     }
 
     try {
@@ -195,42 +256,19 @@ export class FieldTrackingService {
         error?.code === 11000 || /duplicate key/i.test(String(error?.message || ''));
       if (!isDuplicate) throw error;
 
-      const recovered = await FieldTrackingSession.findOne({ userId }).sort({
-        startedAt: -1,
-      });
+      const recovered = await FieldTrackingSession.findOne({
+        userId,
+        status: { $in: [FieldTrackingStatus.FORCE_STOPPED, FieldTrackingStatus.COMPLETED] },
+      }).sort({ startedAt: -1 });
       if (!recovered) throw error;
 
-      const reopened = await FieldTrackingSession.findByIdAndUpdate(
-        recovered._id,
-        {
-          $set: {
-            status: FieldTrackingStatus.ACTIVE,
-            lastLocation: location,
-            organizationId,
-            attendanceId,
-            date: startOfDay(now),
-            startedAt: now,
-          },
-          $unset: { endedAt: 1 },
-        },
-        { new: true }
-      );
-
-      await this.appendLocationPoint(
+      return this.reopenSession(
         recovered._id,
         userId,
         organizationId,
         attendanceId,
-        latitude,
-        longitude,
-        accuracy,
-        batteryLevel,
-        now
+        location
       );
-      await Attendance.findByIdAndUpdate(attendanceId, {
-        fieldTrackingSessionId: recovered._id,
-      });
-      return reopened;
     }
   }
 
@@ -454,7 +492,8 @@ export class FieldTrackingService {
   }
 
   /**
-   * Admin: Force stop a running session (e.g. if employee forgot to check out).
+   * Admin: Force stop one employee's live session only.
+   * Does not disable fieldTrackingEnabled and does not affect other users' sessions.
    */
   async forceStopSession(sessionId: string, organizationId: string): Promise<any> {
     const session = await FieldTrackingSession.findOneAndUpdate(
@@ -463,7 +502,9 @@ export class FieldTrackingService {
       { new: true }
     );
 
-    if (!session) throw new Error('Active session not found');
+    if (!session) {
+      throw new Error('Active session not found for this employee');
+    }
 
     return session;
   }
