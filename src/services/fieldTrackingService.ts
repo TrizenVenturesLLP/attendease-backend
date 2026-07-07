@@ -121,18 +121,31 @@ export class FieldTrackingService {
     batteryLevel?: number,
     recordedAt: Date = new Date()
   ): Promise<void> {
-    await FieldLocationPoint.create({
-      organizationId,
-      userId,
-      sessionId,
-      attendanceId,
-      latitude,
-      longitude,
-      accuracy,
-      recordedAt,
-      receivedAt: new Date(),
-      batteryLevel,
-    });
+    // Skip inserting a redundant point when the device hasn't moved from the last
+    // recorded spot (e.g. an idempotent session start right after check-in).
+    const lastPoint = await FieldLocationPoint.findOne({ sessionId })
+      .sort({ recordedAt: -1 })
+      .lean();
+    const COORD_EPSILON = 0.00002; // ~2 meters
+    const sameSpot =
+      !!lastPoint &&
+      Math.abs(lastPoint.latitude - latitude) < COORD_EPSILON &&
+      Math.abs(lastPoint.longitude - longitude) < COORD_EPSILON;
+
+    if (!sameSpot) {
+      await FieldLocationPoint.create({
+        organizationId,
+        userId,
+        sessionId,
+        attendanceId,
+        latitude,
+        longitude,
+        accuracy,
+        recordedAt,
+        receivedAt: new Date(),
+        batteryLevel,
+      });
+    }
 
     await FieldTrackingSession.findByIdAndUpdate(sessionId, {
       $set: {
@@ -144,7 +157,7 @@ export class FieldTrackingService {
           batteryLevel,
         },
       },
-      $inc: { pointCount: 1 },
+      ...(sameSpot ? {} : { $inc: { pointCount: 1 } }),
     });
   }
 
@@ -299,6 +312,44 @@ export class FieldTrackingService {
     }
 
     const receivedAt = new Date();
+
+    // De-duplicate: only store a point when it is a genuinely fresh reading.
+    // A re-sent cached / stale GPS fix carries the same (or older) fix timestamp
+    // or the exact same coordinates as the last stored point (device idle, GPS
+    // returned a cached fix). In that case we keep the previous point as the
+    // "latest" location instead of inserting a redundant history row.
+    const lastPoint = await FieldLocationPoint.findOne({ sessionId: session._id })
+      .sort({ recordedAt: -1 })
+      .lean();
+
+    if (lastPoint) {
+      const lastTime = new Date(lastPoint.recordedAt).getTime();
+      const notNewer = recordedAt.getTime() <= lastTime;
+      // ~2 meters — treats an unchanged reading as the same spot.
+      const COORD_EPSILON = 0.00002;
+      const sameSpot =
+        Math.abs(lastPoint.latitude - latitude) < COORD_EPSILON &&
+        Math.abs(lastPoint.longitude - longitude) < COORD_EPSILON;
+
+      if (notNewer || sameSpot) {
+        // Refresh how "fresh" the last known location looks (so the live map can
+        // still show the employee as active) but do NOT add a duplicate point.
+        const freshestRecordedAt =
+          recordedAt.getTime() > lastTime ? recordedAt : new Date(lastPoint.recordedAt);
+        await FieldTrackingSession.findByIdAndUpdate(session._id, {
+          $set: {
+            lastLocation: {
+              latitude: lastPoint.latitude,
+              longitude: lastPoint.longitude,
+              accuracy: lastPoint.accuracy,
+              recordedAt: freshestRecordedAt,
+              batteryLevel: batteryLevel ?? lastPoint.batteryLevel,
+            },
+          },
+        });
+        return { point: lastPoint, sessionId: session._id, duplicate: true };
+      }
+    }
 
     // Insert location point into history collection
     const point = await FieldLocationPoint.create({
