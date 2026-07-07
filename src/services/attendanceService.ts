@@ -13,7 +13,13 @@ import { checkInMinioStorage } from '../utils/storage/MinIOStorage';
 import { parseTimeOnDate } from '../utils/organizationSettings';
 import { getNonWorkingHolidayDateKeys } from '../utils/workingDays';
 import { haversineDistance } from '../utils/geoUtils';
-import { BadRequestError } from '../utils/AppError';
+import { BadRequestError, ForbiddenError, NotFoundError } from '../utils/AppError';
+import {
+  endOfOrgCalendarDay,
+  getOrgCalendarDate,
+  getOrganizationTimezone,
+  startOfOrgCalendarDay,
+} from '../utils/timezone';
 import {
   buildImpliedAbsentRecords,
   computeUserAttendanceStats,
@@ -22,6 +28,7 @@ import {
 import { attendanceResolver, mapResolvedToAttendanceStatus } from './attendanceResolver';
 import { shiftService } from './shiftService';
 import { FieldTrackingService } from './fieldTrackingService';
+import { reverseGeocodeAreaName } from '../utils/reverseGeocode';
 
 const fieldTrackingService = new FieldTrackingService();
 
@@ -30,21 +37,104 @@ type GeoPoint = {
   longitude: number;
 };
 
-const CHECKIN_PHOTO_TTL_SEC = 86400;
+/** Stable API path — served by GET /attendance/:id/check-in-photo (does not expire). */
+export function buildCheckInPhotoPath(attendanceId: string): string {
+  return `/attendance/${attendanceId}/check-in-photo`;
+}
+
+function resolveAttendanceId(record: Record<string, unknown>): string | undefined {
+  const raw = record._id ?? record.id;
+  if (!raw) return undefined;
+  if (typeof raw === 'string') return raw;
+  if (typeof raw === 'object' && raw !== null && 'toString' in raw) {
+    return (raw as { toString: () => string }).toString();
+  }
+  return String(raw);
+}
+
+function sanitizeAttendanceForClient<T extends Record<string, unknown>>(record: T): T {
+  const copy = { ...record };
+  delete copy.checkInPhotoData;
+  delete copy.checkInPhotoContentType;
+  return copy;
+}
+
+async function uploadCheckInPhotoWithRetry(
+  imageBuffer: Buffer,
+  fileName: string,
+  folder: string,
+  metadata: Record<string, string>,
+  retries = 2
+): Promise<{ url: string; key: string; bucket?: string }> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      return await checkInMinioStorage.uploadFile(
+        imageBuffer,
+        fileName,
+        'image/jpeg',
+        folder,
+        metadata
+      );
+    } catch (error) {
+      lastError = error;
+      if (attempt < retries) {
+        await new Promise((resolve) => setTimeout(resolve, 500 * (attempt + 1)));
+      }
+    }
+  }
+  throw lastError;
+}
+
+function resolveCheckInPhotoKey(photoRef?: string): string | undefined {
+  const trimmed = photoRef?.trim();
+  if (!trimmed) return undefined;
+  if (trimmed.includes('/attendance/') && trimmed.includes('check-in-photo')) {
+    return undefined;
+  }
+  if (!trimmed.includes('://')) return trimmed;
+
+  try {
+    const url = new URL(trimmed);
+    const path = url.pathname.replace(/^\/+/, '');
+    const bucket =
+      process.env.MINIO_CHECKIN_BUCKET_NAME ||
+      process.env.MINIO_BUCKET_NAME ||
+      'attendence-image-checkin';
+    if (path.startsWith(`${bucket}/`)) {
+      return path.slice(bucket.length + 1);
+    }
+    const segments = path.split('/');
+    if (segments[0] === bucket) {
+      return segments.slice(1).join('/');
+    }
+    return path;
+  } catch {
+    return trimmed;
+  }
+}
 
 async function enrichAttendancePhoto<T extends Record<string, unknown>>(record: T | null): Promise<T | null> {
   if (!record) return record;
 
-  const key = record.photoKey as string | undefined;
-  if (!key) return record;
+  const attendanceId = resolveAttendanceId(record);
+  if (!attendanceId) return record;
 
-  try {
-    const photoUrl = await checkInMinioStorage.getPresignedUrl(key, CHECKIN_PHOTO_TTL_SEC);
-    return { ...record, photoUrl, hasCheckInPhoto: true };
-  } catch (error) {
-    console.warn('Could not generate check-in photo URL:', (error as Error).message);
-    return record;
-  }
+  const key = resolveCheckInPhotoKey(record.photoKey as string | undefined);
+  const stored = Boolean(record.checkInPhotoStored);
+  if (!key && !stored) return sanitizeAttendanceForClient(record);
+
+  const storedUrl = record.photoUrl as string | undefined;
+  const photoUrl = storedUrl?.startsWith('/')
+    ? storedUrl
+    : buildCheckInPhotoPath(attendanceId);
+
+  return sanitizeAttendanceForClient({
+    ...record,
+    photoUrl,
+    hasCheckInPhoto: true,
+    ...(key ? { photoKey: key } : {}),
+  });
 }
 
 async function enrichAttendancePhotos<T extends Record<string, unknown>>(records: T[]): Promise<T[]> {
@@ -165,12 +255,15 @@ export class AttendanceService {
     latitude?: number,
     longitude?: number
   ): Promise<any> {
-    const today = startOfDay(new Date());
+    const orgTimezone = await getOrganizationTimezone(organizationId);
+    const todayCalendar = getOrgCalendarDate(new Date(), orgTimezone);
+    const today = startOfOrgCalendarDay(todayCalendar, orgTimezone);
+    const dayEnd = endOfOrgCalendarDay(todayCalendar, orgTimezone);
 
     const existingAttendance = await Attendance.findOne({
       userId,
       organizationId,
-      date: today,
+      date: { $gte: today, $lte: dayEnd },
     });
 
     if (existingAttendance) {
@@ -199,37 +292,52 @@ export class AttendanceService {
 
     const status = now > graceEnd ? AttendanceStatus.LATE : AttendanceStatus.PRESENT;
 
-    // Upload photo to MinIO if provided
+    // Upload photo to MinIO if provided; fall back to MongoDB when storage is unreachable.
     let photoKey: string | undefined;
+    let checkInPhotoData: Buffer | undefined;
+    let checkInPhotoContentType: string | undefined;
+    let checkInPhotoStored = false;
+
+    console.info('[checkIn] photo received:', {
+      hasPhotoData: Boolean(photoData),
+      photoDataLength: typeof photoData === 'string' ? photoData.length : 0,
+      userId,
+    });
 
     if (photoData) {
+      const base64Data = photoData.replace(/^data:image\/\w+;base64,/, '');
+      const imageBuffer = Buffer.from(base64Data, 'base64');
+
+      const maxSize = 5 * 1024 * 1024;
+      if (imageBuffer.length > maxSize) {
+        throw new Error('Check-in photo must be under 5MB');
+      }
+
+      const year = todayCalendar.slice(0, 4);
+      const month = todayCalendar.slice(5, 7);
+      const day = todayCalendar.slice(8, 10);
+      const folder = `org-${organizationId}/${year}/${month}/${day}`;
+      const fileName = `${userId}_checkin_${now.getTime()}.jpg`;
+      const uploadMeta = { userId, type: 'checkin', date: today.toISOString() };
+
       try {
-        const base64Data = photoData.replace(/^data:image\/\w+;base64,/, '');
-        const imageBuffer = Buffer.from(base64Data, 'base64');
-
-        const maxSize = 5 * 1024 * 1024;
-        if (imageBuffer.length > maxSize) {
-          throw new Error('Check-in photo must be under 5MB');
-        }
-
-        const year = now.getFullYear();
-        const month = String(now.getMonth() + 1).padStart(2, '0');
-        const day = String(now.getDate()).padStart(2, '0');
-        const folder = `org-${organizationId}/${year}/${month}/${day}`;
-
-        const fileName = `${userId}_checkin_${now.getTime()}.jpg`;
-        const result = await checkInMinioStorage.uploadFile(
+        const result = await uploadCheckInPhotoWithRetry(
           imageBuffer,
           fileName,
-          'image/jpeg',
           folder,
-          { userId, type: 'checkin', date: today.toISOString() }
+          uploadMeta
         );
-
         photoKey = result.key;
+        checkInPhotoStored = true;
+        console.info('[checkIn] photo uploaded to MinIO:', result.key);
       } catch (uploadError: any) {
-        console.error('Failed to upload check-in photo:', uploadError.message);
-        photoKey = undefined;
+        console.error(
+          '[checkIn] MinIO upload failed, using database fallback:',
+          uploadError?.message || uploadError
+        );
+        checkInPhotoData = imageBuffer;
+        checkInPhotoContentType = 'image/jpeg';
+        checkInPhotoStored = true;
       }
     }
 
@@ -238,6 +346,18 @@ export class AttendanceService {
 
     const geofenceResult = await processGeofence(organizationId, geoPoint);
 
+    let checkInLocationLabel: string | undefined;
+    if (geoPoint) {
+      try {
+        checkInLocationLabel = await reverseGeocodeAreaName(
+          geoPoint.latitude,
+          geoPoint.longitude
+        );
+      } catch {
+        // Non-blocking — attendance must succeed without area label.
+      }
+    }
+
     const attendance = await Attendance.create({
       userId,
       organizationId,
@@ -245,12 +365,22 @@ export class AttendanceService {
       checkIn: now,
       status,
       photoKey,
+      checkInPhotoData,
+      checkInPhotoContentType,
+      checkInPhotoStored,
       officeLocationId: geofenceResult.officeLocationId,
       checkInLat: geoPoint?.latitude,
       checkInLng: geoPoint?.longitude,
       checkInDistance: geofenceResult.distance,
+      checkInLocationLabel,
       locationStatus: geofenceResult.locationStatus,
     });
+
+    if (checkInPhotoStored) {
+      const stablePhotoUrl = buildCheckInPhotoPath((attendance._id as mongoose.Types.ObjectId).toString());
+      attendance.photoUrl = stablePhotoUrl;
+      await attendance.save();
+    }
 
     if (geofenceResult.locationStatus === LocationStatus.OUT_OF_RANGE) {
       try {
@@ -312,12 +442,15 @@ export class AttendanceService {
     latitude?: number,
     longitude?: number
   ): Promise<any> {
-    const today = startOfDay(new Date());
+    const orgTimezone = await getOrganizationTimezone(organizationId);
+    const todayCalendar = getOrgCalendarDate(new Date(), orgTimezone);
+    const today = startOfOrgCalendarDay(todayCalendar, orgTimezone);
+    const dayEnd = endOfOrgCalendarDay(todayCalendar, orgTimezone);
 
     const attendance = await Attendance.findOne({
       userId,
       organizationId,
-      date: today,
+      date: { $gte: today, $lte: dayEnd },
     });
 
     if (!attendance) {
@@ -333,6 +466,12 @@ export class AttendanceService {
     if (latitude !== undefined && longitude !== undefined) {
       attendance.checkOutLat = latitude;
       attendance.checkOutLng = longitude;
+
+      try {
+        attendance.checkOutLocationLabel = await reverseGeocodeAreaName(latitude, longitude);
+      } catch {
+        // Non-blocking
+      }
 
       if (attendance.officeLocationId) {
         const office = await OfficeLocation.findById(attendance.officeLocationId).lean();
@@ -366,10 +505,19 @@ export class AttendanceService {
   }
 
   async getTodayStatus(userId: string, organizationId: string): Promise<any> {
-    const today = startOfDay(new Date());
+    const orgTimezone = await getOrganizationTimezone(organizationId);
+    const todayCalendar = getOrgCalendarDate(new Date(), orgTimezone);
+    const today = startOfOrgCalendarDay(todayCalendar, orgTimezone);
+    // Match on a day range so a record stored at UTC-midnight or org-midnight is
+    // always found (avoids read/write timezone mismatches leaving the UI stale).
+    const dayEnd = endOfOrgCalendarDay(todayCalendar, orgTimezone);
 
     const [attendance, resolved] = await Promise.all([
-      Attendance.findOne({ userId, organizationId, date: today }),
+      Attendance.findOne({
+        userId,
+        organizationId,
+        date: { $gte: today, $lte: dayEnd },
+      }),
       attendanceResolver.resolve(userId, today),
     ]);
 
@@ -451,13 +599,24 @@ export class AttendanceService {
     const joinDate = user.joiningDate ?? user.createdAt;
 
     const query: any = { userId, organizationId };
-    const rangeStart = startDate ? startOfDay(startDate) : undefined;
-    const rangeEnd = endDate ? startOfDay(endDate) : undefined;
+    const orgTimezone = await getOrganizationTimezone(organizationId);
 
-    if (rangeStart || rangeEnd) {
+    const toCalendarDate = (value: Date | string): string => {
+      if (typeof value === 'string') {
+        const match = /^(\d{4}-\d{2}-\d{2})/.exec(value.trim());
+        if (match) return match[1];
+      }
+      return getOrgCalendarDate(value instanceof Date ? value : new Date(value), orgTimezone);
+    };
+
+    if (startDate || endDate) {
       query.date = {};
-      if (rangeStart) query.date.$gte = rangeStart;
-      if (rangeEnd) query.date.$lte = endOfDay(rangeEnd);
+      if (startDate) {
+        query.date.$gte = startOfOrgCalendarDay(toCalendarDate(startDate), orgTimezone);
+      }
+      if (endDate) {
+        query.date.$lte = endOfOrgCalendarDay(toCalendarDate(endDate), orgTimezone);
+      }
     }
 
     const dbQuery = { ...query };
@@ -475,6 +634,13 @@ export class AttendanceService {
 
     const shouldIncludeImplied =
       !status || status === AttendanceStatus.ABSENT;
+
+    const rangeStart = startDate
+      ? startOfOrgCalendarDay(toCalendarDate(startDate), orgTimezone)
+      : undefined;
+    const rangeEnd = endDate
+      ? endOfOrgCalendarDay(toCalendarDate(endDate), orgTimezone)
+      : undefined;
 
     if (shouldIncludeImplied && rangeStart && rangeEnd) {
       const implied = await buildImpliedAbsentRecords(
@@ -551,16 +717,30 @@ export class AttendanceService {
     limit: number = 50
   ): Promise<any> {
     const query: any = { organizationId };
+    const orgTimezone = await getOrganizationTimezone(organizationId);
+
+    const toCalendarDate = (value: Date | string): string => {
+      if (typeof value === 'string') {
+        const match = /^(\d{4}-\d{2}-\d{2})/.exec(value.trim());
+        if (match) return match[1];
+      }
+      return getOrgCalendarDate(value instanceof Date ? value : new Date(value), orgTimezone);
+    };
 
     if (filters.date) {
+      const dateStr = toCalendarDate(filters.date);
       query.date = {
-        $gte: startOfDay(filters.date),
-        $lte: endOfDay(filters.date),
+        $gte: startOfOrgCalendarDay(dateStr, orgTimezone),
+        $lte: endOfOrgCalendarDay(dateStr, orgTimezone),
       };
     } else if (filters.startDate || filters.endDate) {
       query.date = {};
-      if (filters.startDate) query.date.$gte = startOfDay(filters.startDate);
-      if (filters.endDate) query.date.$lte = endOfDay(filters.endDate);
+      if (filters.startDate) {
+        query.date.$gte = startOfOrgCalendarDay(toCalendarDate(filters.startDate), orgTimezone);
+      }
+      if (filters.endDate) {
+        query.date.$lte = endOfOrgCalendarDay(toCalendarDate(filters.endDate), orgTimezone);
+      }
     }
 
     if (filters.status) {
@@ -598,6 +778,99 @@ export class AttendanceService {
         pages: Math.ceil(total / limit),
       },
     };
+  }
+
+  async getCheckInPhotoBuffer(
+    attendanceId: string,
+    requesterId: string,
+    requesterRole: string,
+    organizationId: string
+  ): Promise<{ buffer: Buffer; contentType: string }> {
+    if (!mongoose.Types.ObjectId.isValid(attendanceId)) {
+      throw new NotFoundError('Attendance record not found');
+    }
+
+    const attendance = await Attendance.findById(attendanceId)
+      .select('+checkInPhotoData +checkInPhotoContentType')
+      .lean();
+    if (!attendance || attendance.organizationId.toString() !== organizationId.toString()) {
+      throw new NotFoundError('Attendance record not found');
+    }
+
+    const objectKey = resolveCheckInPhotoKey(
+      attendance.photoKey || attendance.photoUrl || undefined
+    );
+    const hasDbPhoto =
+      Boolean(attendance.checkInPhotoStored) &&
+      attendance.checkInPhotoData &&
+      (Buffer.isBuffer(attendance.checkInPhotoData)
+        ? attendance.checkInPhotoData.length > 0
+        : (attendance.checkInPhotoData as { length?: number }).length! > 0);
+
+    if (!objectKey && !hasDbPhoto) {
+      throw new NotFoundError('No check-in photo for this attendance record');
+    }
+
+    const recordUserId = attendance.userId.toString();
+    const isOwner = recordUserId === requesterId;
+    const isHrOrAdmin = [UserRole.HR, UserRole.ADMIN, UserRole.SUPER_ADMIN].includes(
+      requesterRole as UserRole
+    );
+
+    let canView = isOwner || isHrOrAdmin;
+    if (!canView && requesterRole === UserRole.SUPERVISOR) {
+      const employee = await User.findById(recordUserId).select('supervisorId').lean();
+      canView = employee?.supervisorId?.toString() === requesterId;
+    }
+
+    if (!canView) {
+      throw new ForbiddenError('You are not authorized to view this check-in photo');
+    }
+
+    if (hasDbPhoto && !objectKey) {
+      const raw = attendance.checkInPhotoData!;
+      const buffer = Buffer.isBuffer(raw) ? raw : Buffer.from(raw as Uint8Array);
+      return {
+        buffer,
+        contentType: attendance.checkInPhotoContentType || 'image/jpeg',
+      };
+    }
+
+    if (!objectKey) {
+      throw new NotFoundError('No check-in photo for this attendance record');
+    }
+
+    try {
+      return await checkInMinioStorage.getObjectBuffer(objectKey);
+    } catch (primaryError) {
+      try {
+        const presignedUrl = await checkInMinioStorage.getPresignedUrl(objectKey, 300);
+        const response = await fetch(presignedUrl);
+        if (!response.ok) {
+          throw primaryError;
+        }
+        const arrayBuffer = await response.arrayBuffer();
+        const contentType = response.headers.get('content-type') || 'image/jpeg';
+        return { buffer: Buffer.from(arrayBuffer), contentType };
+      } catch {
+        if (hasDbPhoto && attendance.checkInPhotoData) {
+          const raw = attendance.checkInPhotoData;
+          const buffer = Buffer.isBuffer(raw) ? raw : Buffer.from(raw as Uint8Array);
+          return {
+            buffer,
+            contentType: attendance.checkInPhotoContentType || 'image/jpeg',
+          };
+        }
+        const message =
+          primaryError instanceof Error ? primaryError.message : 'Storage read failed';
+        if (message.includes('not found') || message.includes('NotFound')) {
+          throw new NotFoundError('Check-in photo file was not found in storage');
+        }
+        throw new NotFoundError(
+          'Check-in photo could not be loaded. The image may not have been uploaded during check-in.'
+        );
+      }
+    }
   }
 
   /**

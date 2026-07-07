@@ -3,6 +3,8 @@ import { attendanceService } from '../services/attendanceService';
 import { AttendanceStatus } from '../models/Attendance';
 import User, { UserRole } from '../models/User';
 import { parseLocalDateInput } from '../utils/dateInput';
+import { ForbiddenError, NotFoundError } from '../utils/AppError';
+import { reverseGeocodeAreaName } from '../utils/reverseGeocode';
 
 export class AttendanceController {
   async checkIn(req: Request, res: Response): Promise<void> {
@@ -240,6 +242,76 @@ export class AttendanceController {
       res.status(500).json({
         success: false,
         error: error.message || 'Failed to get attendance',
+        timestamp: new Date().toISOString(),
+      });
+    }
+  }
+
+  async getCheckInPhoto(req: Request, res: Response): Promise<void> {
+    try {
+      const { id } = req.params as { id: string };
+
+      const { buffer, contentType } = await attendanceService.getCheckInPhotoBuffer(
+        id,
+        req.user!.userId,
+        req.user!.role,
+        req.organizationId!
+      );
+
+      res.set('Content-Type', contentType);
+      res.set('Cache-Control', 'private, max-age=3600');
+      res.send(buffer);
+    } catch (error: unknown) {
+      if (error instanceof NotFoundError) {
+        res.status(404).json({
+          success: false,
+          error: error.message,
+          timestamp: new Date().toISOString(),
+        });
+        return;
+      }
+      if (error instanceof ForbiddenError) {
+        res.status(403).json({
+          success: false,
+          error: error.message,
+          timestamp: new Date().toISOString(),
+        });
+        return;
+      }
+      const message = error instanceof Error ? error.message : 'Failed to get check-in photo';
+      res.status(500).json({
+        success: false,
+        error: message,
+        timestamp: new Date().toISOString(),
+      });
+    }
+  }
+
+  async getAreaName(req: Request, res: Response): Promise<void> {
+    try {
+      const latitude = parseFloat(String(req.query.lat ?? ''));
+      const longitude = parseFloat(String(req.query.lng ?? ''));
+
+      if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) {
+        res.status(400).json({
+          success: false,
+          error: 'Query parameters lat and lng are required',
+          timestamp: new Date().toISOString(),
+        });
+        return;
+      }
+
+      const label = await reverseGeocodeAreaName(latitude, longitude);
+      res.status(200).json({
+        success: true,
+        data: { label: label ?? null },
+        timestamp: new Date().toISOString(),
+      });
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : 'Failed to resolve area name';
+      res.status(500).json({
+        success: false,
+        error: message,
         timestamp: new Date().toISOString(),
       });
     }

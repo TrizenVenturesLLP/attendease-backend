@@ -381,11 +381,45 @@ export class MinIOStorage extends BaseStorage {
       throw new Error('MinIO credentials not configured');
     }
 
-    const result = await this.s3.getObject({ Bucket: this.bucketName, Key: key }).promise();
-    return {
-      buffer: result.Body as Buffer,
-      contentType: result.ContentType || 'image/jpeg',
-    };
+    try {
+      const result = await this.s3.getObject({ Bucket: this.bucketName, Key: key }).promise();
+      const buffer = await this.bodyToBuffer(result.Body);
+      return {
+        buffer,
+        contentType: result.ContentType || 'image/jpeg',
+      };
+    } catch (error: any) {
+      const code = error?.code as string | undefined;
+      if (code === 'NoSuchKey' || code === 'NotFound' || error?.statusCode === 404) {
+        throw new Error(`Object not found in storage: ${key}`);
+      }
+      if (this.isStorageUnreachable(error)) {
+        throw new Error('Storage service is not reachable');
+      }
+      throw new Error(error?.message || 'Failed to read object from storage');
+    }
+  }
+
+  private async bodyToBuffer(body: unknown): Promise<Buffer> {
+    if (!body) return Buffer.alloc(0);
+    if (Buffer.isBuffer(body)) return body;
+    if (body instanceof Uint8Array) return Buffer.from(body);
+    if (typeof body === 'string') return Buffer.from(body);
+
+    const stream = body as NodeJS.ReadableStream;
+    if (typeof stream?.on === 'function') {
+      const chunks: Buffer[] = [];
+      await new Promise<void>((resolve, reject) => {
+        stream.on('data', (chunk: Buffer | string) => {
+          chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+        });
+        stream.on('end', () => resolve());
+        stream.on('error', reject);
+      });
+      return Buffer.concat(chunks);
+    }
+
+    return Buffer.from(body as ArrayBuffer);
   }
 
   /**

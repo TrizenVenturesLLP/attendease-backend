@@ -1,6 +1,15 @@
+import mongoose from 'mongoose';
 import Shift from '../models/Shift';
 import { IAttendancePolicy } from '../models/AttendancePolicy';
 import { shiftToTiming, ShiftTiming } from './attendancePolicyValidation';
+
+const DEFAULT_SHIFT_TIMING: ShiftTiming = {
+  startTime: '09:00',
+  endTime: '18:00',
+  expectedHours: 8,
+  graceMinutes: 15,
+  isNightShift: false,
+};
 
 export async function loadPolicyShiftTiming(
   policy: Pick<IAttendancePolicy, 'shiftId'>
@@ -24,16 +33,14 @@ export async function loadPolicyShiftTiming(
     };
   }
 
-  const shiftId = shiftRef?._id?.toString?.() ?? String(policy.shiftId);
-  const shift = await Shift.findById(shiftId).lean();
+  const rawShiftId = shiftRef?._id?.toString?.() ?? policy.shiftId?.toString?.();
+  if (!rawShiftId || !mongoose.Types.ObjectId.isValid(rawShiftId)) {
+    return DEFAULT_SHIFT_TIMING;
+  }
+
+  const shift = await Shift.findById(rawShiftId).lean();
   if (!shift) {
-    return {
-      startTime: '09:00',
-      endTime: '18:00',
-      expectedHours: 8,
-      graceMinutes: 15,
-      isNightShift: false,
-    };
+    return DEFAULT_SHIFT_TIMING;
   }
   return shiftToTiming(shift);
 }

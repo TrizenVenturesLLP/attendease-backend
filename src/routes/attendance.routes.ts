@@ -61,12 +61,21 @@ router.get(
   attendanceController.getAllAttendance
 );
 
+router.get(
+  '/geocode/area',
+  authorize(UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.HR),
+  attendanceController.getAreaName.bind(attendanceController)
+);
+
 // Supervisor/Admin/HR - view specific user attendance
 router.get(
   '/user/:userId',
   authorize(UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.HR, UserRole.SUPERVISOR),
   attendanceController.getUserAttendance
 );
+
+// Check-in photo (stable URL — served via API, does not expire)
+router.get('/:id/check-in-photo', attendanceController.getCheckInPhoto);
 
 // Office Locations CRUD (Admin/HR)
 router.post(

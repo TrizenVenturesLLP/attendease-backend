@@ -33,6 +33,11 @@ export interface IAttendance extends Document {
   approvedBy?: mongoose.Types.ObjectId;
   photoUrl?: string; // Presigned or legacy public URL for clients
   photoKey?: string; // MinIO object key in check-in bucket
+  /** JPEG bytes when MinIO upload fails (not returned in list APIs). */
+  checkInPhotoData?: Buffer;
+  checkInPhotoContentType?: string;
+  /** True when a check-in photo was stored (MinIO and/or database fallback). */
+  checkInPhotoStored?: boolean;
   officeLocationId?: mongoose.Types.ObjectId;
   fieldTrackingSessionId?: mongoose.Types.ObjectId;
   checkInLat?: number;
@@ -41,6 +46,8 @@ export interface IAttendance extends Document {
   checkOutLat?: number;
   checkOutLng?: number;
   checkOutDistance?: number;
+  checkInLocationLabel?: string;
+  checkOutLocationLabel?: string;
   locationStatus: LocationStatus;
   createdAt: Date;
   updatedAt: Date;
@@ -100,6 +107,18 @@ const AttendanceSchema = new Schema<IAttendance>(
       type: String,
       trim: true,
     },
+    checkInPhotoData: {
+      type: Buffer,
+      select: false,
+    },
+    checkInPhotoContentType: {
+      type: String,
+      select: false,
+    },
+    checkInPhotoStored: {
+      type: Boolean,
+      default: false,
+    },
     officeLocationId: {
       type: Schema.Types.ObjectId,
       ref: 'OfficeLocation',
@@ -135,6 +154,16 @@ const AttendanceSchema = new Schema<IAttendance>(
     checkOutDistance: {
       type: Number,
       min: 0,
+    },
+    checkInLocationLabel: {
+      type: String,
+      trim: true,
+      maxlength: 300,
+    },
+    checkOutLocationLabel: {
+      type: String,
+      trim: true,
+      maxlength: 300,
     },
     locationStatus: {
       type: String,

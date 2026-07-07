@@ -138,7 +138,12 @@ export function resolveDayRule(
     return { dayType: PolicyDayType.WEEKLY_OFF };
   }
 
-  if (rule.useShiftTiming) {
+  const usesShiftTiming =
+    rule.useShiftTiming ??
+    (rule as WeekRule & { useDefaultTiming?: boolean }).useDefaultTiming ??
+    false;
+
+  if (usesShiftTiming) {
     const expectedHours =
       rule.dayType === PolicyDayType.HALF_DAY
         ? Math.round((shift.expectedHours / 2) * 100) / 100
