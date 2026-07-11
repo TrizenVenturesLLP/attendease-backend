@@ -21,7 +21,8 @@
     "lint:fix": "eslint src --ext .ts --fix",
     "format": "prettier --write \"src/**/*.ts\"",
     "format:check": "prettier --check \"src/**/*.ts\"",
-    "type-check": "tsc --noEmit"
+    "type-check": "tsc --noEmit",
+    "verify:minio": "ts-node src/scripts/verifyMinio.ts"
   },
   "keywords": [
     "attendance",

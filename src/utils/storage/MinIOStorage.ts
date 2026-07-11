@@ -166,48 +166,51 @@ export class MinIOStorage extends BaseStorage {
         }
         return true;
       } catch (headError: any) {
+        console.warn(`[MinIOStorage] headBucket failed for '${this.bucketName}':`, headError.code || headError.message || headError);
+        
         if (this.isStorageUnreachable(headError)) {
           throw new Error('MinIO service unavailable');
         }
 
-        if (headError.statusCode === 404 || headError.code === 'NotFound') {
-          try {
-            console.log(`📦 Bucket '${this.bucketName}' not found. Creating it...`);
-            await this.s3.createBucket({ Bucket: this.bucketName }).promise();
+        // Try to create the bucket if it might not exist (404/NotFound or even 403/Forbidden fallback)
+        try {
+          console.log(`📦 Attempting to create bucket '${this.bucketName}'...`);
+          await this.s3.createBucket({ Bucket: this.bucketName }).promise();
 
-            if (!this.privateBucket) {
-              try {
-                await this.ensureBucketPolicy();
-              } catch {
-                // Ignore policy errors - not critical
-              }
+          if (!this.privateBucket) {
+            try {
+              await this.ensureBucketPolicy();
+            } catch {
+              // Ignore policy errors - not critical
             }
-
-            console.log(`✅ Bucket '${this.bucketName}' created successfully`);
-            return true;
-          } catch (createError: any) {
-            if (
-              createError.code === 'BucketAlreadyOwnedByYou' ||
-              createError.code === 'BucketAlreadyExists'
-            ) {
-              return true;
-            }
-            if (this.isStorageUnreachable(createError)) {
-              throw new Error('MinIO service unavailable');
-            }
-            throw createError;
           }
+
+          console.log(`✅ Bucket '${this.bucketName}' created successfully`);
+          return true;
+        } catch (createError: any) {
+          if (
+            createError.code === 'BucketAlreadyOwnedByYou' ||
+            createError.code === 'BucketAlreadyExists'
+          ) {
+            return true;
+          }
+          if (this.isStorageUnreachable(createError)) {
+            throw new Error('MinIO service unavailable');
+          }
+          console.error(`[MinIOStorage] createBucket failed for '${this.bucketName}':`, createError);
+          throw createError;
         }
-        throw headError;
       }
     } catch (error: any) {
+      console.error('[MinIOStorage] Failed to ensure bucket exists:', error);
       if (error.message === 'MinIO service unavailable' || error.message === 'MinIO credentials not configured') {
         throw error;
       }
       if (this.isStorageUnreachable(error)) {
         throw new Error('MinIO service unavailable');
       }
-      throw new Error(`Failed to ensure bucket exists: ${error.message}`);
+      const errMsg = error.message || error.code || (typeof error === 'object' ? JSON.stringify(error) : String(error));
+      throw new Error(`Failed to ensure bucket exists: ${errMsg}`);
     }
   }
 

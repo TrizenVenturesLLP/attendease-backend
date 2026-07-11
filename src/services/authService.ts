@@ -57,6 +57,7 @@ export interface ClientUser {
   authProvider?: string;
   isActive?: boolean;
   profilePhotoUrl?: string;
+  profilePicture?: string;
   hasProfilePhoto?: boolean;
   createdAt?: string;
   dateOfBirth?: string;
@@ -67,6 +68,13 @@ export interface ClientUser {
   fieldTrackingEnabled?: boolean;
   /** Minutes between location uploads (default 5) */
   fieldTrackingIntervalMinutes?: number;
+  supervisor?: {
+    _id: string;
+    firstName: string;
+    lastName: string;
+    fullName: string;
+    email: string;
+  };
 }
 
 export interface LoginResult {
@@ -306,6 +314,29 @@ class AuthService {
         typeof intervalMinutes === 'number' && intervalMinutes > 0 ? intervalMinutes : 5,
     };
 
+    const supervisorId = (user as any).supervisorId;
+    if (supervisorId) {
+      if (typeof supervisorId === 'object' && supervisorId._id) {
+        const sf = supervisorId.firstName || '';
+        const sl = supervisorId.lastName || '';
+        clientUser.supervisor = {
+          _id: supervisorId._id.toString(),
+          firstName: sf,
+          lastName: sl,
+          fullName: `${sf} ${sl}`.trim() || supervisorId.email,
+          email: supervisorId.email,
+        };
+      } else {
+        clientUser.supervisor = {
+          _id: supervisorId.toString(),
+          firstName: '',
+          lastName: '',
+          fullName: 'Manager',
+          email: '',
+        };
+      }
+    }
+
     if (organizationId && role !== UserRole.SUPER_ADMIN) {
       const org = await Organization.findById(organizationId)
         .select('name subscriptionPlan subdomain')
@@ -324,10 +355,12 @@ class AuthService {
     if (profilePhotoKey) {
       clientUser.hasProfilePhoto = true;
       try {
-        clientUser.profilePhotoUrl = await profileMinioStorage.getPresignedUrl(
+        const presignedUrl = await profileMinioStorage.getPresignedUrl(
           profilePhotoKey,
           86400
         );
+        clientUser.profilePhotoUrl = presignedUrl;
+        clientUser.profilePicture = presignedUrl;
       } catch (error) {
         console.warn('Could not generate profile photo URL:', (error as Error).message);
       }

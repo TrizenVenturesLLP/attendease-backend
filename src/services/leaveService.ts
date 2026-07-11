@@ -6,6 +6,7 @@ import LeaveType, { ILeaveType, LeaveTypeStatus } from '../models/LeaveType';
 import Attendance, { AttendanceStatus } from '../models/Attendance';
 import User, { UserRole } from '../models/User';
 import { ILeavePolicy } from '../models/LeavePolicy';
+import ApprovalWorkflow from '../models/ApprovalWorkflow';
 import { startOfDay, endOfDay, eachDayOfInterval } from 'date-fns';
 import {
   countOrganizationWorkingDaysInRange,
@@ -426,7 +427,28 @@ export class LeaveService {
     const balance = await this.getOrCreateLeaveBalance(userId, targetYear, organizationId);
     const populated = await LeaveBalance.findById(balance._id)
       .populate('balances.leaveTypeId', 'name code isPaid isOther allowHalfDay requiresDocument')
-      .lean();
+      .lean() as any;
+
+    if (populated) {
+      const user = await User.findById(userId).lean();
+      let policy = await resolveUserLeavePolicy(user as any);
+      if (!policy) {
+        policy = await leavePolicyService.ensureDefaultPolicyForOrg(organizationId);
+      }
+
+      if (policy) {
+        let workflow: any = policy.workflowId;
+        if (workflow && (typeof workflow === 'string' || workflow instanceof mongoose.Types.ObjectId)) {
+          workflow = await ApprovalWorkflow.findById(workflow).lean();
+        }
+        populated.policy = {
+          _id: policy._id.toString(),
+          policyName: policy.policyName,
+          workflow,
+        };
+      }
+    }
+
     return populated;
   }
 
