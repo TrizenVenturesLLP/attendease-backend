@@ -22,6 +22,13 @@ export interface IFieldTrackingSession extends Document {
     batteryLevel?: number;
   };
   pointCount: number;
+  /**
+   * When the employee first turned location off during this active session.
+   * Used so the 5-minute grace countdown survives app reloads.
+   */
+  locationDisabledSince?: Date | null;
+  /** Why the session ended (checkout, force-stop, stale auto-close, etc.). */
+  closeReason?: string;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -86,6 +93,15 @@ const FieldTrackingSessionSchema = new Schema<IFieldTrackingSession>(
     pointCount: {
       type: Number,
       default: 0,
+    },
+    locationDisabledSince: {
+      type: Date,
+      default: null,
+    },
+    closeReason: {
+      type: String,
+      trim: true,
+      maxlength: 500,
     },
   },
   {

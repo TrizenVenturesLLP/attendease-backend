@@ -6,6 +6,12 @@ import LeaveBalance from '../models/LeaveBalance';
 import SalaryStructure from '../models/SalaryStructure';
 import PayrollRecord from '../models/PayrollRecord';
 import Department from '../models/Department';
+import FieldTrackingSession from '../models/FieldTrackingSession';
+import FieldLocationPoint from '../models/FieldLocationPoint';
+import FieldTrackingAlert from '../models/FieldTrackingAlert';
+import AttendanceRegularization from '../models/AttendanceRegularization';
+import NotificationRead from '../models/NotificationRead';
+import BirthdayEmailLog from '../models/BirthdayEmailLog';
 
 /**
  * Permanently remove users and their scoped data so emails can be reused (e.g. re-invite).
@@ -19,11 +25,24 @@ export async function deleteUsersAndRelatedData(
 
   const userScopedFilter = { userId: { $in: userIds } };
 
+  // Field tracking points reference sessions — delete points first.
+  const sessions = await FieldTrackingSession.find(userScopedFilter).select('_id').lean();
+  const sessionIds = sessions.map((s) => s._id);
+  if (sessionIds.length > 0) {
+    await FieldLocationPoint.deleteMany({ sessionId: { $in: sessionIds } });
+  }
+  await FieldLocationPoint.deleteMany(userScopedFilter);
+  await FieldTrackingSession.deleteMany(userScopedFilter);
+  await FieldTrackingAlert.deleteMany(userScopedFilter);
+
   await Attendance.deleteMany(userScopedFilter);
+  await AttendanceRegularization.deleteMany(userScopedFilter);
   await Leave.deleteMany(userScopedFilter);
   await LeaveBalance.deleteMany(userScopedFilter);
   await SalaryStructure.deleteMany(userScopedFilter);
   await PayrollRecord.deleteMany(userScopedFilter);
+  await NotificationRead.deleteMany(userScopedFilter);
+  await BirthdayEmailLog.deleteMany(userScopedFilter);
 
   await User.updateMany(
     { supervisorId: { $in: userIds } },
@@ -36,6 +55,10 @@ export async function deleteUsersAndRelatedData(
   await Attendance.updateMany(
     { approvedBy: { $in: userIds } },
     { $unset: { approvedBy: '' } }
+  );
+  await AttendanceRegularization.updateMany(
+    { reviewedBy: { $in: userIds } },
+    { $unset: { reviewedBy: '', reviewedAt: '', reviewNotes: '' } }
   );
 
   await Department.updateMany(

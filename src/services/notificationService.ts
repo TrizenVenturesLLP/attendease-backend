@@ -10,6 +10,9 @@ import User, { UserRole } from '../models/User';
 import Organization from '../models/Organization';
 import PayrollRun, { PayrollRunStatus } from '../models/PayrollRun';
 import NotificationRead from '../models/NotificationRead';
+import FieldTrackingAlert, {
+  FieldTrackingAlertType,
+} from '../models/FieldTrackingAlert';
 import { leaveService } from './leaveService';
 import { attendanceService } from './attendanceService';
 import { attendanceRegularizationService } from './attendanceRegularizationService';
@@ -30,7 +33,8 @@ export type NotificationItemType =
   | 'subscription_expiring'
   | 'account_deactivated'
   | 'birthday_today'
-  | 'colleague_birthday';
+  | 'colleague_birthday'
+  | 'field_location_disabled';
 
 export interface NotificationItemDTO {
   id: string;
@@ -395,6 +399,52 @@ export class NotificationService {
               createdAt: new Date().toISOString(),
             });
           }
+        }
+      }
+
+      // Field tracking: employee turned off location and was auto checked out
+      if (
+        role === UserRole.ADMIN ||
+        role === UserRole.HR ||
+        role === UserRole.SUPERVISOR ||
+        role === UserRole.SUPER_ADMIN
+      ) {
+        const since = subDays(new Date(), 1);
+        const alerts = await FieldTrackingAlert.find({
+          organizationId: orgId,
+          type: FieldTrackingAlertType.LOCATION_DISABLED_AUTO_CHECKOUT,
+          createdAt: { $gte: since },
+        })
+          .sort({ createdAt: -1 })
+          .limit(30)
+          .populate('userId', 'firstName lastName fullName employeeId email')
+          .lean();
+
+        for (const alert of alerts) {
+          const u = alert.userId as {
+            firstName?: string;
+            lastName?: string;
+            fullName?: string;
+            employeeId?: string;
+            email?: string;
+          } | null;
+          const name = u
+            ? u.fullName ||
+              `${u.firstName || ''} ${u.lastName || ''}`.trim() ||
+              u.employeeId ||
+              u.email ||
+              'Employee'
+            : 'Employee';
+          items.push({
+            id: `field-location-disabled:${alert._id}`,
+            type: 'field_location_disabled',
+            title: 'Field tracking interrupted',
+            body:
+              alert.message ||
+              `${name} turned off location and was auto checked out.`,
+            href: '/dashboard/field-tracking',
+            createdAt: toIso(alert.createdAt as Date),
+          });
         }
       }
 

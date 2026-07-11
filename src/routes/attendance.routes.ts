@@ -74,8 +74,9 @@ router.get(
   attendanceController.getUserAttendance
 );
 
-// Check-in photo (stable URL — served via API, does not expire)
+// Check-in / check-out photos (stable URL — served via API, does not expire)
 router.get('/:id/check-in-photo', attendanceController.getCheckInPhoto);
+router.get('/:id/check-out-photo', attendanceController.getCheckOutPhoto);
 
 // Office Locations CRUD (Admin/HR)
 router.post(

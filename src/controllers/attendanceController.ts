@@ -38,13 +38,14 @@ export class AttendanceController {
   async checkOut(req: Request, res: Response): Promise<void> {
     try {
       const userId = req.user!.userId;
-      const { latitude, longitude } = req.body;
+      const { photoData, latitude, longitude } = req.body;
 
       const attendance = await attendanceService.checkOut(
         userId,
         req.organizationId!,
         latitude ? parseFloat(latitude) : undefined,
-        longitude ? parseFloat(longitude) : undefined
+        longitude ? parseFloat(longitude) : undefined,
+        photoData
       );
 
       res.status(200).json({
@@ -279,6 +280,46 @@ export class AttendanceController {
         return;
       }
       const message = error instanceof Error ? error.message : 'Failed to get check-in photo';
+      res.status(500).json({
+        success: false,
+        error: message,
+        timestamp: new Date().toISOString(),
+      });
+    }
+  }
+
+  async getCheckOutPhoto(req: Request, res: Response): Promise<void> {
+    try {
+      const { id } = req.params as { id: string };
+
+      const { buffer, contentType } = await attendanceService.getCheckOutPhotoBuffer(
+        id,
+        req.user!.userId,
+        req.user!.role,
+        req.organizationId!
+      );
+
+      res.set('Content-Type', contentType);
+      res.set('Cache-Control', 'private, max-age=3600');
+      res.send(buffer);
+    } catch (error: unknown) {
+      if (error instanceof NotFoundError) {
+        res.status(404).json({
+          success: false,
+          error: error.message,
+          timestamp: new Date().toISOString(),
+        });
+        return;
+      }
+      if (error instanceof ForbiddenError) {
+        res.status(403).json({
+          success: false,
+          error: error.message,
+          timestamp: new Date().toISOString(),
+        });
+        return;
+      }
+      const message = error instanceof Error ? error.message : 'Failed to get check-out photo';
       res.status(500).json({
         success: false,
         error: message,

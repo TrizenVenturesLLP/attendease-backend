@@ -23,6 +23,16 @@ router.post('/location', fieldTrackingController.recordLocation);
 // Stop tracking session (called on check-out)
 router.post('/session/stop', fieldTrackingController.stopSession);
 
+// Persist / clear when location is turned off (grace countdown source of truth)
+router.post('/location-disabled', fieldTrackingController.markLocationDisabled);
+router.post('/location-restored', fieldTrackingController.clearLocationDisabled);
+
+// Location was off for grace period — auto check-out + notify admins
+router.post(
+  '/location-disabled-checkout',
+  fieldTrackingController.locationDisabledCheckout
+);
+
 // Get own active session (useful after app restart to resume tracking)
 router.get('/session/active', fieldTrackingController.getActiveSession);
 
