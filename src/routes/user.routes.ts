@@ -76,6 +76,17 @@ router.get(
 );
 
 /**
+ * @route   PATCH /api/users/:id/status
+ * @desc    Activate or deactivate user account
+ * @access  Private (Super Admin/Admin/HR)
+ */
+router.patch(
+  '/:id/status',
+  authorize(UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.HR),
+  userController.updateUserStatus
+);
+
+/**
  * @route   GET /api/users/:id
  * @desc    Get user by ID
  * @access  Private (All authenticated users)

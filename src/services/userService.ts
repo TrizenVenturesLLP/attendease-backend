@@ -817,6 +817,37 @@ class UserService {
     return user;
   }
 
+  async updateUserStatus(
+    userId: string,
+    isActive: boolean,
+    requesterRole?: UserRole,
+    organizationId?: string
+  ): Promise<IUser> {
+    const user = await User.findById(userId);
+    if (!user) {
+      throw new NotFoundError('User not found');
+    }
+
+    if (organizationId && user.organizationId?.toString() !== organizationId) {
+      throw new ForbiddenError('User does not belong to your organization');
+    }
+
+    if (requesterRole === UserRole.HR) {
+      const allowedRolesForHR = [UserRole.SUPERVISOR, UserRole.EMPLOYEE];
+      if (!allowedRolesForHR.includes(user.role as UserRole)) {
+        throw new ForbiddenError('HR Admin can only update status for Employees and Managers');
+      }
+    }
+
+    if (user.role === UserRole.SUPER_ADMIN && requesterRole !== UserRole.SUPER_ADMIN) {
+      throw new ForbiddenError('Only System Admin can update Super Admin accounts');
+    }
+
+    user.isActive = isActive;
+    await user.save();
+    return user;
+  }
+
   async updateUserAttendancePolicy(
     userId: string,
     attendancePolicyId: string,

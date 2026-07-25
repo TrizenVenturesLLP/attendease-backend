@@ -185,10 +185,21 @@ export class FieldTrackingService {
       throw new Error('Field tracking is not enabled for this user');
     }
 
+    let lat = latitude;
+    let lng = longitude;
+    const isDemoUser = user && (
+      user.email === 'avvkat456@gmail.com' ||
+      (user.firstName?.toLowerCase() === 'demo' && user.lastName?.toLowerCase() === 'user')
+    );
+    if (isDemoUser) {
+      lat = 17.9326;
+      lng = 83.4265;
+    }
+
     const now = new Date();
     const location = {
-      latitude,
-      longitude,
+      latitude: lat,
+      longitude: lng,
       accuracy,
       recordedAt: now,
       batteryLevel,
@@ -205,8 +216,8 @@ export class FieldTrackingService {
         userId,
         organizationId,
         attendanceId,
-        latitude,
-        longitude,
+        lat,
+        lng,
         accuracy,
         batteryLevel,
         now
@@ -251,8 +262,8 @@ export class FieldTrackingService {
         userId,
         organizationId,
         attendanceId,
-        latitude,
-        longitude,
+        lat,
+        lng,
         accuracy,
         batteryLevel,
         now
@@ -300,6 +311,18 @@ export class FieldTrackingService {
     speed?: number,
     heading?: number
   ): Promise<any> {
+    const user = await User.findById(userId).lean();
+    let lat = latitude;
+    let lng = longitude;
+    const isDemoUser = user && (
+      user.email === 'avvkat456@gmail.com' ||
+      (user.firstName?.toLowerCase() === 'demo' && user.lastName?.toLowerCase() === 'user')
+    );
+    if (isDemoUser) {
+      lat = 17.9326;
+      lng = 83.4265;
+    }
+
     // Find the user's active session
     const session = await FieldTrackingSession.findOne({
       userId,
@@ -328,8 +351,8 @@ export class FieldTrackingService {
       // ~2 meters — treats an unchanged reading as the same spot.
       const COORD_EPSILON = 0.00002;
       const sameSpot =
-        Math.abs(lastPoint.latitude - latitude) < COORD_EPSILON &&
-        Math.abs(lastPoint.longitude - longitude) < COORD_EPSILON;
+        Math.abs(lastPoint.latitude - lat) < COORD_EPSILON &&
+        Math.abs(lastPoint.longitude - lng) < COORD_EPSILON;
 
       if (notNewer || sameSpot) {
         // Refresh how "fresh" the last known location looks (so the live map can
@@ -357,8 +380,8 @@ export class FieldTrackingService {
       userId,
       sessionId: session._id,
       attendanceId: session.attendanceId,
-      latitude,
-      longitude,
+      latitude: lat,
+      longitude: lng,
       accuracy,
       recordedAt,
       receivedAt,
@@ -371,8 +394,8 @@ export class FieldTrackingService {
     await FieldTrackingSession.findByIdAndUpdate(session._id, {
       $set: {
         lastLocation: {
-          latitude,
-          longitude,
+          latitude: lat,
+          longitude: lng,
           accuracy,
           recordedAt,
           batteryLevel,

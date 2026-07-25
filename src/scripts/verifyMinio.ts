@@ -1,4 +1,8 @@
+import dotenv from 'dotenv';
+import path from 'path';
 import * as AWS from 'aws-sdk';
+
+dotenv.config({ path: path.resolve(__dirname, '../../.env') });
 
 async function run() {
   console.log('--- MinIO Credentials and Connection Verification ---');

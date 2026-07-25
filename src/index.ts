@@ -1,5 +1,5 @@
-import createApp from './app';
 import config from './config';
+import createApp from './app';
 import connectDB from './config/db';
 import { logEmailServiceConfigAtStartup } from './services/emailNotificationService';
 import { startBirthdayEmailScheduler } from './jobs/birthdayEmailScheduler';

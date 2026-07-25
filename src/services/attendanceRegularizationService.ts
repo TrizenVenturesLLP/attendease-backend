@@ -148,11 +148,16 @@ export class AttendanceRegularizationService {
     return users.map(u => u._id as mongoose.Types.ObjectId);
   }
 
-  /** HR reviewers must not see regularization requests submitted by other HR users. */
+  /**
+   * Build the review queue:
+   * - HR reviewers: employee/supervisor requests only (exclude HR submitters)
+   * - Admin reviewers: optionally filter to HR submitters via requesterRole=hr
+   */
   private async buildReviewQuery(
     organizationId: string,
     reviewerRole: string,
-    status: RegularizationStatus = RegularizationStatus.PENDING
+    status: RegularizationStatus = RegularizationStatus.PENDING,
+    requesterRole?: string
   ): Promise<Record<string, unknown>> {
     const query: Record<string, unknown> = {
       organizationId,
@@ -164,6 +169,16 @@ export class AttendanceRegularizationService {
       if (hrUserIds.length > 0) {
         query.userId = { $nin: hrUserIds };
       }
+      return query;
+    }
+
+    // Admin / Super Admin: optional scope to HR-submitted requests
+    if (
+      (reviewerRole === UserRole.ADMIN || reviewerRole === UserRole.SUPER_ADMIN) &&
+      requesterRole === UserRole.HR
+    ) {
+      const hrUserIds = await this.getHrUserIds(organizationId);
+      query.userId = hrUserIds.length > 0 ? { $in: hrUserIds } : { $in: [] };
     }
 
     return query;
@@ -223,9 +238,15 @@ export class AttendanceRegularizationService {
     reviewerRole: string,
     page = 1,
     limit = 50,
-    status: RegularizationStatus = RegularizationStatus.PENDING
+    status: RegularizationStatus = RegularizationStatus.PENDING,
+    requesterRole?: string
   ): Promise<{ records: IAttendanceRegularization[]; pagination: object }> {
-    const query = await this.buildReviewQuery(organizationId, reviewerRole, status);
+    const query = await this.buildReviewQuery(
+      organizationId,
+      reviewerRole,
+      status,
+      requesterRole
+    );
 
     const skip = (page - 1) * limit;
     const sort: Record<string, 1 | -1> =

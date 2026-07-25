@@ -38,6 +38,7 @@ export class MinIOStorage extends BaseStorage {
     let protocol = useSSL ? 'https' : 'http';
     let host = 'srv-captain--extrahand-minio-storage';
     let port = rawPort || '';
+    let endpointPath = '';
 
     if (rawEndpoint) {
       try {
@@ -45,6 +46,8 @@ export class MinIOStorage extends BaseStorage {
           const url = new URL(rawEndpoint);
           host = url.hostname || host;
           protocol = url.protocol.replace(':', '') || protocol;
+          endpointPath = url.pathname.replace(/\/$/, '');
+
           if (url.port) {
             port = url.port;
           } else if (rawPort) {
@@ -68,7 +71,7 @@ export class MinIOStorage extends BaseStorage {
       port = protocol === 'http' ? '9000' : '';
     }
 
-    const endpointString = `${protocol}://${host}${port ? `:${port}` : ''}`;
+    const endpointString = `${protocol}://${host}${port ? `:${port}` : ''}${endpointPath}`;
     this.endpoint = endpointString;
     
     // Support both MINIO_ACCESS_KEY and MINIO_ROOT_USER (CapRover uses MINIO_ROOT_USER)

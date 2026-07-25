@@ -277,6 +277,44 @@ class UserController {
   }
 
   /**
+   * @route   PATCH /api/users/:id/status
+   * @desc    Activate or deactivate user account
+   * @access  Private (Super Admin/Admin/HR)
+   */
+  async updateUserStatus(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      if (!req.user) {
+        throw new BadRequestError('User not authenticated');
+      }
+
+      const { id } = req.params;
+      const { isActive } = req.body;
+
+      if (typeof isActive !== 'boolean') {
+        throw new BadRequestError('isActive must be a boolean');
+      }
+
+      const user = await userService.updateUserStatus(
+        id,
+        isActive,
+        req.user.role as UserRole,
+        req.organizationId
+      );
+
+      const response: ApiResponse<typeof user> = {
+        success: true,
+        message: `User account ${isActive ? 'activated' : 'deactivated'} successfully`,
+        data: user,
+        timestamp: new Date().toISOString(),
+      };
+
+      res.status(200).json(response);
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  /**
    * @route   GET /api/users/next-employee-id
    * @desc    Suggest next employee ID for an organization
    * @access  Private (Super Admin/Admin/HR)

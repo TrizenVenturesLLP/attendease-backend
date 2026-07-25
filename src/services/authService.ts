@@ -132,6 +132,22 @@ class AuthService {
     }
 
     if (!user) {
+      const inactiveQuery: any = {
+        ...emailQuery,
+        isActive: false,
+      };
+      if (organizationId) {
+        inactiveQuery.organizationId = organizationId;
+      }
+
+      const inactiveUser = await User.findOne(inactiveQuery).select('+password');
+
+      if (inactiveUser) {
+        throw new UnauthorizedError(
+          'Your account has been deactivated. Please contact your administrator or HR for assistance.'
+        );
+      }
+
       throw new UnauthorizedError('Invalid email or password');
     }
 

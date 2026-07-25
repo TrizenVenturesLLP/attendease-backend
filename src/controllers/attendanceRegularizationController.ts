@@ -93,6 +93,8 @@ export class AttendanceRegularizationController {
         statusParam && Object.values(RegularizationStatus).includes(statusParam)
           ? statusParam
           : RegularizationStatus.PENDING;
+      const requesterRole =
+        typeof req.query.requesterRole === 'string' ? req.query.requesterRole : undefined;
 
       const result = await attendanceRegularizationService.getPendingRequests(
         req.organizationId!,
@@ -100,7 +102,8 @@ export class AttendanceRegularizationController {
         req.user!.role,
         page,
         limit,
-        status
+        status,
+        requesterRole
       );
 
       res.status(200).json({
