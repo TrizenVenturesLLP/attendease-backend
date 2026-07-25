@@ -328,14 +328,11 @@ export class FieldTrackingService {
     }
 
     const now = new Date();
-    const location = {
-      latitude: lat,
-      longitude: lng,
     const timeZone = await getOrganizationTimezone(organizationId);
     const todayKey = getOrgCalendarDate(now, timeZone);
     const location: LocationInput = {
-      latitude,
-      longitude,
+      latitude: lat,
+      longitude: lng,
       accuracy,
       recordedAt: now,
       batteryLevel,
@@ -371,14 +368,6 @@ export class FieldTrackingService {
       // Different attendance (e.g. new day check-in) — never reuse.
       await this.completeSession(
         active._id,
-        userId,
-        organizationId,
-        attendanceId,
-        lat,
-        lng,
-        accuracy,
-        batteryLevel,
-        now
         FieldTrackingStatus.COMPLETED,
         'Automatically closed because a new attendance check-in started tracking'
       );
@@ -424,11 +413,6 @@ export class FieldTrackingService {
         userId,
         organizationId,
         attendanceId,
-        lat,
-        lng,
-        accuracy,
-        batteryLevel,
-        now
         location
       );
 
@@ -550,12 +534,6 @@ export class FieldTrackingService {
       lng = 83.4265;
     }
 
-    // Find the user's active session
-    const session = await FieldTrackingSession.findOne({
-      userId,
-      organizationId,
-      status: FieldTrackingStatus.ACTIVE,
-    });
     await this.closeStaleSessionsForUser(userId, organizationId);
 
     let session: any = null;
@@ -616,8 +594,6 @@ export class FieldTrackingService {
       const sameSpot =
         Math.abs(lastPoint.latitude - lat) < COORD_EPSILON &&
         Math.abs(lastPoint.longitude - lng) < COORD_EPSILON;
-        Math.abs(lastPoint.latitude - latitude) < COORD_EPSILON &&
-        Math.abs(lastPoint.longitude - longitude) < COORD_EPSILON;
       const tooSoon = recordedAt.getTime() - lastTime < SAME_SPOT_DEDUPE_MS;
 
       // Without pointId (legacy clients): drop only non-newer or rapid same-spot bursts.
@@ -650,7 +626,7 @@ export class FieldTrackingService {
       longitude: lng,
       accuracy,
       recordedAt,
-      receivedAt,
+      receivedAt: new Date(),
       batteryLevel,
       speed,
       heading,
@@ -693,7 +669,7 @@ export class FieldTrackingService {
     } catch (error: any) {
       // Concurrent offline retry with same pointId
       if (error?.code === 11000 && options?.pointId) {
-        const existing = await FieldLocationPoint.findOne({ pointId: options.pointId }).lean();
+        const existing = await FieldLocationPoint.findOne({ pointId: options?.pointId }).lean();
         if (existing) {
           return { point: existing, sessionId: session._id, duplicate: true };
         }

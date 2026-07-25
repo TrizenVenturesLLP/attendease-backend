@@ -559,7 +559,7 @@ export class AttendanceService {
       attendance.checkOutLng = longitude;
 
       try {
-        attendance.checkOutLocationLabel = await reverseGeocodeAreaName(lat, lng);
+        attendance.checkOutLocationLabel = await reverseGeocodeAreaName(latitude, longitude);
       } catch {
         // Non-blocking
       }
@@ -567,7 +567,7 @@ export class AttendanceService {
       if (attendance.officeLocationId) {
         const office = await OfficeLocation.findById(attendance.officeLocationId).lean();
         if (office) {
-          const dist = haversineDistance(lat, lng, office.latitude, office.longitude);
+          const dist = haversineDistance(latitude, longitude, office.latitude, office.longitude);
           attendance.checkOutDistance = Math.round(dist);
         }
       }
