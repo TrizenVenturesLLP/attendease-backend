@@ -5,6 +5,8 @@ export interface IFieldLocationPoint extends Document {
   userId: mongoose.Types.ObjectId;
   sessionId: mongoose.Types.ObjectId;
   attendanceId?: mongoose.Types.ObjectId;
+  /** Client-generated id for idempotent retries / offline queue flush. */
+  pointId?: string;
   latitude: number;
   longitude: number;
   accuracy?: number;
@@ -39,6 +41,11 @@ const FieldLocationPointSchema = new Schema<IFieldLocationPoint>(
     attendanceId: {
       type: Schema.Types.ObjectId,
       ref: 'Attendance',
+    },
+    pointId: {
+      type: String,
+      trim: true,
+      maxlength: 128,
     },
     latitude: {
       type: Number,
@@ -79,6 +86,11 @@ const FieldLocationPointSchema = new Schema<IFieldLocationPoint>(
 FieldLocationPointSchema.index({ sessionId: 1, recordedAt: 1 });
 FieldLocationPointSchema.index({ organizationId: 1, userId: 1, recordedAt: 1 });
 FieldLocationPointSchema.index({ organizationId: 1, recordedAt: 1 });
+// Idempotent offline retries — sparse so legacy points without pointId are fine
+FieldLocationPointSchema.index(
+  { pointId: 1 },
+  { unique: true, sparse: true }
+);
 
 const FieldLocationPoint = mongoose.model<IFieldLocationPoint>(
   'FieldLocationPoint',

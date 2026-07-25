@@ -942,6 +942,14 @@ class UserService {
       throw new ForbiddenError('Only Super Admin can delete System Admin users');
     }
 
+    // Company Admin cannot delete other Admins (or themselves — already blocked).
+    if (
+      requesterRole === UserRole.ADMIN &&
+      user.role === UserRole.ADMIN
+    ) {
+      throw new ForbiddenError('Admins cannot delete other admin accounts');
+    }
+
     if (
       organizationId &&
       user.organizationId?.toString() !== organizationId

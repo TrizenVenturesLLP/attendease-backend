@@ -28,6 +28,7 @@ import {
 import { attendanceResolver, mapResolvedToAttendanceStatus } from './attendanceResolver';
 import { shiftService } from './shiftService';
 import { FieldTrackingService } from './fieldTrackingService';
+import { FieldTrackingStatus } from '../models/FieldTrackingSession';
 import { reverseGeocodeAreaName } from '../utils/reverseGeocode';
 
 const fieldTrackingService = new FieldTrackingService();
@@ -56,7 +57,14 @@ function sanitizeAttendanceForClient<T extends Record<string, unknown>>(record: 
   const copy = { ...record };
   delete copy.checkInPhotoData;
   delete copy.checkInPhotoContentType;
+  delete copy.checkOutPhotoData;
+  delete copy.checkOutPhotoContentType;
   return copy;
+}
+
+/** Stable API path — served by GET /attendance/:id/check-out-photo (does not expire). */
+export function buildCheckOutPhotoPath(attendanceId: string): string {
+  return `/attendance/${attendanceId}/check-out-photo`;
 }
 
 async function uploadCheckInPhotoWithRetry(
@@ -120,20 +128,45 @@ async function enrichAttendancePhoto<T extends Record<string, unknown>>(record: 
   const attendanceId = resolveAttendanceId(record);
   if (!attendanceId) return record;
 
-  const key = resolveCheckInPhotoKey(record.photoKey as string | undefined);
-  const stored = Boolean(record.checkInPhotoStored);
-  if (!key && !stored) return sanitizeAttendanceForClient(record);
+  const checkInKey = resolveCheckInPhotoKey(record.photoKey as string | undefined);
+  const hasCheckIn = Boolean(record.checkInPhotoStored) || Boolean(checkInKey);
+  const checkOutKey = resolveCheckInPhotoKey(record.checkOutPhotoKey as string | undefined);
+  const hasCheckOut = Boolean(record.checkOutPhotoStored) || Boolean(checkOutKey);
 
-  const storedUrl = record.photoUrl as string | undefined;
-  const photoUrl = storedUrl?.startsWith('/')
-    ? storedUrl
-    : buildCheckInPhotoPath(attendanceId);
+  if (!hasCheckIn && !hasCheckOut) {
+    return sanitizeAttendanceForClient(record);
+  }
+
+  const storedCheckInUrl = record.photoUrl as string | undefined;
+  const photoUrl = hasCheckIn
+    ? storedCheckInUrl?.startsWith('/')
+      ? storedCheckInUrl
+      : buildCheckInPhotoPath(attendanceId)
+    : record.photoUrl;
+
+  const storedCheckOutUrl = record.checkOutPhotoUrl as string | undefined;
+  const checkOutPhotoUrl = hasCheckOut
+    ? storedCheckOutUrl?.startsWith('/')
+      ? storedCheckOutUrl
+      : buildCheckOutPhotoPath(attendanceId)
+    : record.checkOutPhotoUrl;
 
   return sanitizeAttendanceForClient({
     ...record,
-    photoUrl,
-    hasCheckInPhoto: true,
-    ...(key ? { photoKey: key } : {}),
+    ...(hasCheckIn
+      ? {
+          photoUrl,
+          hasCheckInPhoto: true,
+          ...(checkInKey ? { photoKey: checkInKey } : {}),
+        }
+      : {}),
+    ...(hasCheckOut
+      ? {
+          checkOutPhotoUrl,
+          hasCheckOutPhoto: true,
+          ...(checkOutKey ? { checkOutPhotoKey: checkOutKey } : {}),
+        }
+      : {}),
   });
 }
 
@@ -454,7 +487,8 @@ export class AttendanceService {
     userId: string,
     organizationId: string,
     latitude?: number,
-    longitude?: number
+    longitude?: number,
+    photoData?: string
   ): Promise<any> {
     const orgTimezone = await getOrganizationTimezone(organizationId);
     const todayCalendar = getOrgCalendarDate(new Date(), orgTimezone);
@@ -477,23 +511,52 @@ export class AttendanceService {
 
     attendance.checkOut = new Date();
 
-    let lat = latitude;
-    let lng = longitude;
+    if (photoData) {
+      const base64Data = photoData.replace(/^data:image\/\w+;base64,/, '');
+      const imageBuffer = Buffer.from(base64Data, 'base64');
 
-    const userObj = await User.findById(userId).select('email firstName lastName').lean();
-    const isDemoUser = userObj && (
-      userObj.email === 'avvkat456@gmail.com' ||
-      (userObj.firstName?.toLowerCase() === 'demo' && userObj.lastName?.toLowerCase() === 'user')
-    );
+      const maxSize = 5 * 1024 * 1024;
+      if (imageBuffer.length > maxSize) {
+        throw new Error('Check-out photo must be under 5MB');
+      }
 
-    if (isDemoUser) {
-      lat = 17.9326;
-      lng = 83.4265;
+      const year = todayCalendar.slice(0, 4);
+      const month = todayCalendar.slice(5, 7);
+      const day = todayCalendar.slice(8, 10);
+      const folder = `org-${organizationId}/${year}/${month}/${day}`;
+      const fileName = `${userId}_checkout_${attendance.checkOut.getTime()}.jpg`;
+      const uploadMeta = { userId, type: 'checkout', date: today.toISOString() };
+
+      try {
+        const result = await uploadCheckInPhotoWithRetry(
+          imageBuffer,
+          fileName,
+          folder,
+          uploadMeta
+        );
+        attendance.checkOutPhotoKey = result.key;
+        attendance.checkOutPhotoStored = true;
+        console.info('[checkOut] photo uploaded to MinIO:', result.key);
+      } catch (uploadError: any) {
+        console.error(
+          '[checkOut] MinIO upload failed, using database fallback:',
+          uploadError?.message || uploadError
+        );
+        attendance.checkOutPhotoData = imageBuffer;
+        attendance.checkOutPhotoContentType = 'image/jpeg';
+        attendance.checkOutPhotoStored = true;
+      }
+
+      if (attendance.checkOutPhotoStored) {
+        attendance.checkOutPhotoUrl = buildCheckOutPhotoPath(
+          (attendance._id as mongoose.Types.ObjectId).toString()
+        );
+      }
     }
 
-    if (lat !== undefined && lng !== undefined) {
-      attendance.checkOutLat = lat;
-      attendance.checkOutLng = lng;
+    if (latitude !== undefined && longitude !== undefined) {
+      attendance.checkOutLat = latitude;
+      attendance.checkOutLng = longitude;
 
       try {
         attendance.checkOutLocationLabel = await reverseGeocodeAreaName(lat, lng);
@@ -516,20 +579,29 @@ export class AttendanceService {
     attendance.status = mapResolvedToAttendanceStatus(resolved.attendanceStatus);
     await attendance.save();
 
-    // Auto-stop field tracking session if one is active
+    // End field tracking: save check-out GPS on the session first, then mark completed.
     let fieldTrackingStopped = false;
     try {
-      const trackingUser = await User.findById(userId).select('fieldTrackingEnabled').lean();
-      if (trackingUser?.fieldTrackingEnabled) {
-        await fieldTrackingService.stopSession(userId, organizationId);
-        fieldTrackingStopped = true;
-      }
+      await fieldTrackingService.stopSession(
+        userId,
+        organizationId,
+        FieldTrackingStatus.COMPLETED,
+        'Stopped on employee check-out',
+        latitude !== undefined && longitude !== undefined
+          ? { latitude, longitude, recordedAt: attendance.checkOut || new Date() }
+          : undefined
+      );
+      fieldTrackingStopped = true;
     } catch (trackingError: any) {
-      // Tracking failure must never block check-out
+      // No active session (or already stopped) must never block check-out
       console.error('Auto field tracking stop failed (non-critical):', trackingError.message);
     }
 
-    return { ...attendance.toObject(), fieldTrackingStopped };
+    const enriched = await enrichAttendancePhoto(
+      attendance.toObject() as unknown as Record<string, unknown>
+    );
+
+    return { ...((enriched ?? {}) as object), fieldTrackingStopped };
   }
 
   async getTodayStatus(userId: string, organizationId: string): Promise<any> {
@@ -896,6 +968,99 @@ export class AttendanceService {
         }
         throw new NotFoundError(
           'Check-in photo could not be loaded. The image may not have been uploaded during check-in.'
+        );
+      }
+    }
+  }
+
+  async getCheckOutPhotoBuffer(
+    attendanceId: string,
+    requesterId: string,
+    requesterRole: string,
+    organizationId: string
+  ): Promise<{ buffer: Buffer; contentType: string }> {
+    if (!mongoose.Types.ObjectId.isValid(attendanceId)) {
+      throw new NotFoundError('Attendance record not found');
+    }
+
+    const attendance = await Attendance.findById(attendanceId)
+      .select('+checkOutPhotoData +checkOutPhotoContentType')
+      .lean();
+    if (!attendance || attendance.organizationId.toString() !== organizationId.toString()) {
+      throw new NotFoundError('Attendance record not found');
+    }
+
+    const objectKey = resolveCheckInPhotoKey(
+      attendance.checkOutPhotoKey || attendance.checkOutPhotoUrl || undefined
+    );
+    const hasDbPhoto =
+      Boolean(attendance.checkOutPhotoStored) &&
+      attendance.checkOutPhotoData &&
+      (Buffer.isBuffer(attendance.checkOutPhotoData)
+        ? attendance.checkOutPhotoData.length > 0
+        : (attendance.checkOutPhotoData as { length?: number }).length! > 0);
+
+    if (!objectKey && !hasDbPhoto) {
+      throw new NotFoundError('No check-out photo for this attendance record');
+    }
+
+    const recordUserId = attendance.userId.toString();
+    const isOwner = recordUserId === requesterId;
+    const isHrOrAdmin = [UserRole.HR, UserRole.ADMIN, UserRole.SUPER_ADMIN].includes(
+      requesterRole as UserRole
+    );
+
+    let canView = isOwner || isHrOrAdmin;
+    if (!canView && requesterRole === UserRole.SUPERVISOR) {
+      const employee = await User.findById(recordUserId).select('supervisorId').lean();
+      canView = employee?.supervisorId?.toString() === requesterId;
+    }
+
+    if (!canView) {
+      throw new ForbiddenError('You are not authorized to view this check-out photo');
+    }
+
+    if (hasDbPhoto && !objectKey) {
+      const raw = attendance.checkOutPhotoData!;
+      const buffer = Buffer.isBuffer(raw) ? raw : Buffer.from(raw as Uint8Array);
+      return {
+        buffer,
+        contentType: attendance.checkOutPhotoContentType || 'image/jpeg',
+      };
+    }
+
+    if (!objectKey) {
+      throw new NotFoundError('No check-out photo for this attendance record');
+    }
+
+    try {
+      return await checkInMinioStorage.getObjectBuffer(objectKey);
+    } catch (primaryError) {
+      try {
+        const presignedUrl = await checkInMinioStorage.getPresignedUrl(objectKey, 300);
+        const response = await fetch(presignedUrl);
+        if (!response.ok) {
+          throw primaryError;
+        }
+        const arrayBuffer = await response.arrayBuffer();
+        const contentType = response.headers.get('content-type') || 'image/jpeg';
+        return { buffer: Buffer.from(arrayBuffer), contentType };
+      } catch {
+        if (hasDbPhoto && attendance.checkOutPhotoData) {
+          const raw = attendance.checkOutPhotoData;
+          const buffer = Buffer.isBuffer(raw) ? raw : Buffer.from(raw as Uint8Array);
+          return {
+            buffer,
+            contentType: attendance.checkOutPhotoContentType || 'image/jpeg',
+          };
+        }
+        const message =
+          primaryError instanceof Error ? primaryError.message : 'Storage read failed';
+        if (message.includes('not found') || message.includes('NotFound')) {
+          throw new NotFoundError('Check-out photo file was not found in storage');
+        }
+        throw new NotFoundError(
+          'Check-out photo could not be loaded. The image may not have been uploaded during check-out.'
         );
       }
     }

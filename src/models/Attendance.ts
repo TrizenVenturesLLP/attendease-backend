@@ -38,6 +38,13 @@ export interface IAttendance extends Document {
   checkInPhotoContentType?: string;
   /** True when a check-in photo was stored (MinIO and/or database fallback). */
   checkInPhotoStored?: boolean;
+  checkOutPhotoUrl?: string;
+  checkOutPhotoKey?: string;
+  /** JPEG bytes when MinIO upload fails (not returned in list APIs). */
+  checkOutPhotoData?: Buffer;
+  checkOutPhotoContentType?: string;
+  /** True when a check-out photo was stored (MinIO and/or database fallback). */
+  checkOutPhotoStored?: boolean;
   officeLocationId?: mongoose.Types.ObjectId;
   fieldTrackingSessionId?: mongoose.Types.ObjectId;
   checkInLat?: number;
@@ -116,6 +123,25 @@ const AttendanceSchema = new Schema<IAttendance>(
       select: false,
     },
     checkInPhotoStored: {
+      type: Boolean,
+      default: false,
+    },
+    checkOutPhotoUrl: {
+      type: String,
+    },
+    checkOutPhotoKey: {
+      type: String,
+      trim: true,
+    },
+    checkOutPhotoData: {
+      type: Buffer,
+      select: false,
+    },
+    checkOutPhotoContentType: {
+      type: String,
+      select: false,
+    },
+    checkOutPhotoStored: {
       type: Boolean,
       default: false,
     },
