@@ -167,6 +167,7 @@ export class AttendanceController {
         department,
         attendancePolicyId,
         dayType,
+        userId,
         page,
         limit,
       } = req.query;
@@ -179,6 +180,10 @@ export class AttendanceController {
       if (department) filters.department = department as string;
       if (attendancePolicyId) filters.attendancePolicyId = attendancePolicyId as string;
       if (dayType) filters.dayType = dayType as string;
+      if (userId) filters.userId = userId as string;
+      if (req.query.includeImpliedAbsents === 'true') {
+        filters.includeImpliedAbsents = true;
+      }
 
       const result = await attendanceService.getAllAttendance(
         req.organizationId!,

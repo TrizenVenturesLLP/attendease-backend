@@ -34,7 +34,7 @@ function getEffectiveJoinDate(user: { joiningDate?: Date; createdAt: Date }): Da
   return startOfDay(user.joiningDate ?? user.createdAt);
 }
 
-function isDateOnApprovedLeave(
+function isDateOnLeave(
   date: Date,
   leaves: Array<{ startDate: Date; endDate: Date }>
 ): boolean {
@@ -176,7 +176,7 @@ export async function computeUserAttendanceStats(
       continue;
     }
 
-    if (isDateOnApprovedLeave(day, approvedLeaves)) {
+    if (isDateOnLeave(day, approvedLeaves)) {
       leaveDays += 1;
       continue;
     }
@@ -227,12 +227,12 @@ export async function buildImpliedAbsentRecords(
     return [];
   }
 
-  const [holidayDateKeys, approvedLeaves] = await Promise.all([
+  const [holidayDateKeys, leaveRecords] = await Promise.all([
     getNonWorkingHolidayDateKeys(organizationId, start, end),
     Leave.find({
       userId,
       organizationId,
-      status: LeaveStatus.APPROVED,
+      status: { $in: [LeaveStatus.APPROVED, LeaveStatus.PENDING, LeaveStatus.PARTIALLY_APPROVED] },
       startDate: { $lte: endOfDay(end) },
       endDate: { $gte: start },
     })
@@ -248,6 +248,9 @@ export async function buildImpliedAbsentRecords(
   const days = eachDayOfInterval({ start, end });
 
   for (const day of days) {
+    if (day.getDay() === 0) {
+      continue;
+    }
     if (!(await isPolicyWorkingDay(userId, organizationId, day, holidayDateKeys))) {
       continue;
     }
@@ -255,7 +258,7 @@ export async function buildImpliedAbsentRecords(
     if (existingKeys.has(key)) {
       continue;
     }
-    if (isDateOnApprovedLeave(day, approvedLeaves)) {
+    if (isDateOnLeave(day, leaveRecords)) {
       continue;
     }
 

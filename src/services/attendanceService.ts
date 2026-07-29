@@ -691,7 +691,9 @@ export class AttendanceService {
     page: number = 1,
     limit: number = 30
   ): Promise<any> {
-    const user = await User.findById(userId).select('createdAt joiningDate').lean();
+    const user = await User.findById(userId)
+      .select('createdAt joiningDate firstName lastName email employeeId department')
+      .lean();
     if (!user) {
       throw new Error('User not found');
     }
@@ -727,7 +729,10 @@ export class AttendanceService {
       delete dbQuery.status;
     }
 
-    const dbRecords = await Attendance.find(dbQuery).sort({ date: -1 }).lean();
+    const dbRecords = await Attendance.find(dbQuery)
+      .populate('userId', 'firstName lastName email employeeId department')
+      .sort({ date: -1 })
+      .lean();
 
     type AttendanceRow = Record<string, unknown>;
     let merged: AttendanceRow[] = dbRecords as unknown as AttendanceRow[];
@@ -735,11 +740,19 @@ export class AttendanceService {
     const shouldIncludeImplied =
       !status || status === AttendanceStatus.ABSENT;
 
+    const lastRecordDate = dbRecords[0]?.date ? new Date(dbRecords[0].date) : undefined;
+    const firstRecordDate = dbRecords.length > 0 && dbRecords[dbRecords.length - 1]?.date
+      ? new Date(dbRecords[dbRecords.length - 1].date)
+      : undefined;
     const rangeStart = startDate
       ? startOfOrgCalendarDay(toCalendarDate(startDate), orgTimezone)
-      : undefined;
+      : firstRecordDate
+      ? startOfOrgCalendarDay(toCalendarDate(firstRecordDate), orgTimezone)
+      : startOfOrgCalendarDay(getOrgCalendarDate(joinDate, orgTimezone), orgTimezone);
     const rangeEnd = endDate
       ? endOfOrgCalendarDay(toCalendarDate(endDate), orgTimezone)
+      : lastRecordDate
+      ? endOfOrgCalendarDay(toCalendarDate(lastRecordDate), orgTimezone)
       : undefined;
 
     if (shouldIncludeImplied && rangeStart && rangeEnd) {
@@ -751,7 +764,11 @@ export class AttendanceService {
         joinDate,
         dbRecords
       );
-      merged = [...merged, ...(implied as unknown as AttendanceRow[])];
+      const impliedWithUser = implied.map((record) => ({
+        ...record,
+        userId: user,
+      }));
+      merged = [...merged, ...(impliedWithUser as unknown as AttendanceRow[])];
       if (status === AttendanceStatus.ABSENT) {
         merged = merged.filter((r) => r.status === AttendanceStatus.ABSENT);
       }
@@ -812,6 +829,8 @@ export class AttendanceService {
       department?: string;
       attendancePolicyId?: string;
       dayType?: string;
+      userId?: string;
+      includeImpliedAbsents?: boolean;
     },
     page: number = 1,
     limit: number = 50
@@ -852,7 +871,23 @@ export class AttendanceService {
     if (filters.department) userFilter.department = filters.department;
     if (filters.attendancePolicyId) userFilter.attendancePolicyId = filters.attendancePolicyId;
 
-    if (filters.department || filters.attendancePolicyId) {
+    if (filters.userId) {
+      userFilter._id = filters.userId;
+    }
+
+    if (filters.includeImpliedAbsents && filters.userId) {
+      return this.getUserAttendance(
+        filters.userId,
+        organizationId,
+        filters.startDate,
+        filters.endDate,
+        filters.status,
+        page,
+        limit
+      );
+    }
+
+    if (filters.department || filters.attendancePolicyId || filters.userId) {
       const matchedUsers = await User.find(userFilter).select('_id');
       query.userId = { $in: matchedUsers.map((u) => u._id) };
     }
