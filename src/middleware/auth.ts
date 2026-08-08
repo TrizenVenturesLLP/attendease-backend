@@ -62,3 +62,29 @@ export const authorize = (...allowedRoles: string[]) => {
     next();
   };
 };
+
+/**
+ * Email-based authorization middleware
+ * Use after authenticate middleware
+ */
+export const authorizeEmail = (...allowedEmails: string[]) => {
+  return (req: Request, _res: Response, next: NextFunction): void => {
+    if (!req.user) {
+      next(new UnauthorizedError('Not authenticated'));
+      return;
+    }
+
+    const userEmail = req.user.email?.toLowerCase();
+    const isAllowed = allowedEmails.some(
+      (email) => email.toLowerCase() === userEmail
+    );
+
+    if (!isAllowed) {
+      next(new ForbiddenError('Access restricted to specific user accounts'));
+      return;
+    }
+
+    next();
+  };
+};
+

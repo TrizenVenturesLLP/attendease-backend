@@ -1,8 +1,8 @@
 import { UserRole } from '../models/User';
 import Department from '../models/Department';
-import Leave from '../models/Leave';
 import { attendanceService } from './attendanceService';
 import userService from './userService';
+import { leaveService } from './leaveService';
 
 interface DashboardStats {
   totalUsers?: number;
@@ -31,9 +31,9 @@ class DashboardService {
       case UserRole.SUPER_ADMIN:
         return this.getSuperAdminStats();
       case UserRole.ADMIN:
-        return this.getAdminHRStats(organizationId);
+        return this.getAdminHRStats(userId, organizationId);
       case UserRole.HR:
-        return this.getAdminHRStats(organizationId, userRole);
+        return this.getAdminHRStats(userId, organizationId, userRole);
       case UserRole.SUPERVISOR:
         return this.getSupervisorStats(userId, organizationId);
       default:
@@ -46,6 +46,7 @@ class DashboardService {
    * When requesterRole/requesterId are provided (HR), stats are scoped to users HR can see (employees, supervisors, HR only).
    */
   private async getAdminHRStats(
+    userId: string,
     organizationId: string | undefined,
     requesterRole?: UserRole
   ): Promise<DashboardStats> {
@@ -70,16 +71,20 @@ class DashboardService {
       requesterRole === UserRole.HR ? userIds : undefined
     );
 
-    // Pending leave approvals (scoped to same user set for HR)
-    const leaveQuery: any = {
-      organizationId: organizationId!,
-      status: { $in: ['PENDING', 'PARTIALLY_APPROVED', 'pending'] },
-    };
-    if (requesterRole === UserRole.HR && userIds.length > 0) {
-      leaveQuery.userId = { $in: users.map((u) => u._id) };
+    // Pending leave approvals (scoped to leaves awaiting action by this reviewer)
+    let pendingLeaveApprovals = 0;
+    if (organizationId && userId) {
+      try {
+        const pendingRes = await leaveService.getPendingLeaves(
+          userId,
+          organizationId,
+          requesterRole || UserRole.ADMIN
+        );
+        pendingLeaveApprovals = pendingRes.pagination.total;
+      } catch {
+        pendingLeaveApprovals = 0;
+      }
     }
-    const allLeaves = await Leave.find(leaveQuery).lean();
-    const pendingLeaveApprovals = allLeaves.length;
 
     return {
       totalUsers,
@@ -104,13 +109,20 @@ class DashboardService {
     const teamMemberIds = teamMembers.map(m => m._id.toString());
     const todayAttendance = await this.getTodayAttendanceSummary(organizationId, teamMemberIds);
 
-    // Get pending leave approvals for team
-    const teamPendingLeaves = await Leave.find({
-      organizationId: organizationId!,
-      userId: { $in: teamMembers.map(m => m._id) },
-      status: { $in: ['PENDING', 'PARTIALLY_APPROVED', 'pending'] },
-    }).lean();
-    const pendingLeaveApprovals = teamPendingLeaves.length;
+    // Get pending leave approvals for team (scoped to leaves awaiting action by supervisor)
+    let pendingLeaveApprovals = 0;
+    if (organizationId && supervisorId) {
+      try {
+        const pendingRes = await leaveService.getPendingLeaves(
+          supervisorId,
+          organizationId,
+          UserRole.SUPERVISOR
+        );
+        pendingLeaveApprovals = pendingRes.pagination.total;
+      } catch {
+        pendingLeaveApprovals = 0;
+      }
+    }
 
     return {
       teamSize,
