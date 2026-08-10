@@ -16,7 +16,7 @@ export interface IPlatformSettings extends Document {
 const DemoInvitationDefaultsSchema = new Schema<DemoInvitationDefaults>(
   {
     inviteLinkTtlHours: { type: Number, required: true, min: 1, max: 168, default: 48 },
-    demoAccessTtlDays: { type: Number, required: true, min: 1, max: 90, default: 7 },
+    demoAccessTtlDays: { type: Number, required: true, min: 1, max: 90, default: 30 },
   },
   { _id: false }
 );

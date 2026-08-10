@@ -129,7 +129,7 @@ const config: Config = {
   })(),
   demoInvitations: {
     inviteLinkTtlHours: parseInt(process.env.DEMO_INVITE_LINK_TTL_HOURS || '48', 10),
-    demoAccessTtlDays: parseInt(process.env.DEMO_ACCESS_TTL_DAYS || '7', 10),
+    demoAccessTtlDays: parseInt(process.env.DEMO_ACCESS_TTL_DAYS || '30', 10),
   },
   microsoft: {
     clientId: process.env.MICROSOFT_CLIENT_ID || '',
