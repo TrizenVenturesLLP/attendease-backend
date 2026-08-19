@@ -17,6 +17,7 @@ import leavePolicyRoutes from './leavePolicy.routes';
 import approvalWorkflowRoutes from './approvalWorkflow.routes';
 import platformRoutes from './platform.routes';
 import fieldTrackingRoutes from './fieldTracking.routes';
+import billingRoutes from './billing.routes';
 
 const router = Router();
 
@@ -40,5 +41,6 @@ router.use('/leave-policies', leavePolicyRoutes);
 router.use('/approval-workflows', approvalWorkflowRoutes);
 router.use('/platform', platformRoutes);
 router.use('/field-tracking', fieldTrackingRoutes);
+router.use('/billing', billingRoutes);
 
 export default router;

@@ -31,7 +31,7 @@ class MicrosoftAuthService {
    */
   private getMsalClient(): ConfidentialClientApplication {
     if (!config.microsoft.clientId || !config.microsoft.clientSecret) {
-      throw new BadRequestError('Microsoft authentication is not configured');
+      throw new BadRequestError('Coming soon');
     }
 
     if (!this.msalClient) {

@@ -22,6 +22,9 @@ import {
   validateOrgInvitation as validateOrgInvitationLink,
   markInvitationAccepted,
 } from './invitationValidationService';
+import OtpToken from '../models/OtpToken';
+import subscriptionService from './subscriptionService';
+import { BillingCycle } from '../models/Subscription';
 
 function resolveProfileComplete(user: IUser): boolean {
   if (user.profileComplete === true) {
@@ -802,6 +805,182 @@ class AuthService {
     user.resetPasswordToken = undefined;
     user.resetPasswordExpires = undefined;
     await user.save();
+  }
+
+  /**
+   * Send 6-digit OTP verification code to work email
+   */
+  async sendOtp(email: string): Promise<{ success: boolean; message: string }> {
+    if (!email || !email.trim()) {
+      throw new BadRequestError('Email address is required');
+    }
+
+    const normalizedEmail = this.normalizeEmail(email);
+
+    // Check if an account already exists with this email BEFORE sending OTP
+    const existingUser = await User.findOne({
+      email: { $regex: `^${normalizedEmail.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, $options: 'i' },
+      isActive: true,
+    });
+
+    if (existingUser) {
+      throw new ConflictError(
+        'An account with this email already exists. Please log in instead.'
+      );
+    }
+
+    // Generate random 6-digit code
+    const otp = Math.floor(100000 + Math.random() * 900000).toString();
+    const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 mins
+
+    await OtpToken.deleteMany({ email: normalizedEmail });
+    await OtpToken.create({
+      email: normalizedEmail,
+      otp,
+      expiresAt,
+      verified: false,
+    });
+
+    // Send OTP to user's email via the email service
+    await emailNotificationService.sendOtpEmail(normalizedEmail, otp);
+
+    logger.info(`[AuthService] OTP sent to ${normalizedEmail}`);
+
+    return {
+      success: true,
+      message: `Verification code sent to ${normalizedEmail}`,
+      // otp NOT included in response — only delivered via email
+    };
+  }
+
+  /**
+   * Verify 6-digit OTP code
+   */
+  async verifyOtp(email: string, otp: string): Promise<boolean> {
+    if (!email || !otp) {
+      throw new BadRequestError('Email and verification code are required');
+    }
+
+    const normalizedEmail = this.normalizeEmail(email);
+    const record = await OtpToken.findOne({
+      email: normalizedEmail,
+      otp: otp.trim(),
+      expiresAt: { $gt: new Date() },
+    });
+
+    if (!record) {
+      throw new BadRequestError('Invalid or expired verification code');
+    }
+
+    record.verified = true;
+    await record.save();
+    return true;
+  }
+
+  /**
+   * Self-Serve 30-Day Free Trial Registration Flow:
+   * Organization registers -> Email/OTP verification -> Org details -> Employee count -> Select Starter/Growth -> 30-Day Trial Created -> IMMEDIATE ACCESS
+   */
+  async registerTrial(payload: {
+    fullName: string;
+    email: string;
+    phone?: string;
+    password: string;
+    organizationName: string;
+    employeeCount: number;
+    planId?: string;
+    billingCycle?: string;
+  }): Promise<LoginResult & { organization: any; subscription: any }> {
+    const { fullName, email, phone, password, organizationName, employeeCount, planId, billingCycle } = payload;
+
+    if (!fullName || !email || !password || !organizationName) {
+      throw new BadRequestError('Full name, email, password, and organization name are required');
+    }
+
+    if (password.length < 6) {
+      throw new BadRequestError('Password must be at least 6 characters');
+    }
+
+    const normalizedEmail = this.normalizeEmail(email);
+
+    // Ensure account doesn't already exist
+    const existingUser = await User.findOne({ email: normalizedEmail, isActive: true });
+    if (existingUser) {
+      throw new ConflictError('An account with this email address already exists. Please log in.');
+    }
+
+    // Split name into first & last name
+    const nameParts = fullName.trim().split(/\s+/);
+    const firstName = nameParts[0] || 'Admin';
+    const lastName = nameParts.slice(1).join(' ') || 'User';
+
+    // Auto-generate unique orgCode (3-char uppercase)
+    let cleanName = organizationName.replace(/[^a-zA-Z0-9]/g, '').toUpperCase();
+    let orgCode = cleanName.slice(0, 3) || 'TRZ';
+    if (orgCode.length < 3) orgCode = (orgCode + 'XYZ').slice(0, 3);
+
+    let count = 0;
+    while (await Organization.findOne({ orgCode })) {
+      count++;
+      orgCode = (cleanName.slice(0, 2) + count).slice(0, 3);
+    }
+
+    // Auto-generate unique subdomain
+    let subdomain = organizationName
+      .toLowerCase()
+      .replace(/[^a-z0-9]/g, '-')
+      .replace(/-+/g, '-')
+      .replace(/^-|-$/g, '');
+    if (!subdomain) subdomain = 'company-' + Date.now().toString().slice(-4);
+    let subCount = 0;
+    while (await Organization.findOne({ subdomain })) {
+      subCount++;
+      subdomain = `${subdomain}-${subCount}`;
+    }
+
+    // 1. Create Organization
+    const organization = await Organization.create({
+      name: organizationName.trim(),
+      orgCode,
+      subdomain,
+      isActive: true,
+    });
+
+    // 2. Create 30-Day Free Trial Subscription
+    const subscription = await subscriptionService.createTrialSubscription(
+      organization._id,
+      employeeCount || 50,
+      planId,
+      (billingCycle as BillingCycle) || BillingCycle.MONTHLY
+    );
+
+    // 3. Create Admin User
+    const user = await User.create({
+      organizationId: organization._id,
+      email: normalizedEmail,
+      password,
+      firstName,
+      lastName,
+      phone: phone?.trim(),
+      role: UserRole.ADMIN,
+      isActive: true,
+      profileComplete: true,
+    });
+
+    organization.createdBy = user._id;
+    await organization.save();
+
+    // 4. Generate token for immediate access
+    const token = this.generateToken(user);
+    const loginResult = await this.createLoginResult(token, user);
+
+    logger.info(`[AuthService] 30-Day Trial registered successfully for ${organizationName} (${normalizedEmail})`);
+
+    return {
+      ...loginResult,
+      organization,
+      subscription,
+    };
   }
 }
 

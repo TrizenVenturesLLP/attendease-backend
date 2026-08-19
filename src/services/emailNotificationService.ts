@@ -459,7 +459,42 @@ class EmailNotificationService {
       throw error;
     }
   }
+
+  /**
+   * Send OTP verification code email for trial registration
+   */
+  async sendOtpEmail(email: string, otp: string, name?: string): Promise<void> {
+    if (!this.isEmailConfigured()) {
+      this.warnEmailSkipped('OTP email');
+      logger.warn(`[EmailNotificationService] OTP email skipped (EMAIL_SERVICE_URL not set). OTP for ${email}: ${otp}`);
+      return;
+    }
+
+    const endpoint = `${config.emailService.url}/api/v1/email/send-otp`;
+
+    try {
+      await axios.post(
+        endpoint,
+        {
+          email,
+          name: name || email,
+          otp,
+          expiresInMinutes: 10,
+          platformName: 'TrizenHR',
+        },
+        {
+          headers: this.getHeaders(),
+          timeout: 10000,
+        }
+      );
+      logger.info('[EmailNotificationService] OTP email sent', { to: email });
+    } catch (error) {
+      logger.error('[EmailNotificationService] OTP email failed', formatAxiosError(error));
+      // Don't throw — log only, so the OTP is still stored and the user can retry
+    }
+  }
 }
+
 
 export function logEmailServiceConfigAtStartup(): void {
   const urlSet = Boolean(config.emailService.url);

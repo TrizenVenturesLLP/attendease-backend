@@ -481,6 +481,93 @@ class AuthController {
       next(error);
     }
   }
+
+  /**
+   * @route   POST /api/auth/send-otp
+   * @desc    Send 6-digit OTP verification code to work email
+   * @access  Public
+   */
+  async sendOtp(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const { email } = req.body;
+      const result = await authService.sendOtp(email);
+
+      const response: ApiResponse<typeof result> = {
+        success: true,
+        message: result.message,
+        data: result,
+        timestamp: new Date().toISOString(),
+      };
+
+      res.status(200).json(response);
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  /**
+   * @route   POST /api/auth/verify-otp
+   * @desc    Verify 6-digit OTP code
+   * @access  Public
+   */
+  async verifyOtp(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const { email, otp } = req.body;
+      await authService.verifyOtp(email, otp);
+
+      const response: ApiResponse = {
+        success: true,
+        message: 'Verification code confirmed successfully',
+        timestamp: new Date().toISOString(),
+      };
+
+      res.status(200).json(response);
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  /**
+   * @route   POST /api/auth/register-trial
+   * @desc    Self-serve 30-Day Free Trial registration with immediate access
+   * @access  Public
+   */
+  async registerTrial(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const {
+        fullName,
+        email,
+        phone,
+        password,
+        organizationName,
+        employeeCount,
+        planId,
+        billingCycle,
+      } = req.body;
+
+      const result = await authService.registerTrial({
+        fullName,
+        email,
+        phone,
+        password,
+        organizationName,
+        employeeCount: Number(employeeCount) || 50,
+        planId,
+        billingCycle,
+      });
+
+      const response: ApiResponse<typeof result> = {
+        success: true,
+        message: '30-Day Free Trial created successfully. Welcome to TrizenHR!',
+        data: result,
+        timestamp: new Date().toISOString(),
+      };
+
+      res.status(201).json(response);
+    } catch (error) {
+      next(error);
+    }
+  }
 }
 
 export default new AuthController();

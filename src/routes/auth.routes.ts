@@ -43,6 +43,27 @@ router.post('/reset-password', authController.resetPassword);
 router.post('/demo-request', authController.requestDemo);
 
 /**
+ * @route   POST /api/auth/send-otp
+ * @desc    Send 6-digit OTP verification code
+ * @access  Public
+ */
+router.post('/send-otp', authController.sendOtp);
+
+/**
+ * @route   POST /api/auth/verify-otp
+ * @desc    Verify 6-digit OTP code
+ * @access  Public
+ */
+router.post('/verify-otp', authController.verifyOtp);
+
+/**
+ * @route   POST /api/auth/register-trial
+ * @desc    Self-serve 30-Day Free Trial registration with immediate access
+ * @access  Public
+ */
+router.post('/register-trial', authController.registerTrial);
+
+/**
  * @route   GET /api/auth/microsoft/url
  * @desc    Get Microsoft OAuth authorization URL
  * @access  Public
