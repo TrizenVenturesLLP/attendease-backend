@@ -1,8 +1,11 @@
+import http from 'http';
 import config from './config';
 import createApp from './app';
 import connectDB from './config/db';
+import { connectRedis } from './config/redis';
 import { logEmailServiceConfigAtStartup } from './services/emailNotificationService';
 import { startBirthdayEmailScheduler } from './jobs/birthdayEmailScheduler';
+import { attachFieldTrackingSocket } from './socket/fieldTrackingSocket';
 
 const startServer = async (): Promise<void> => {
   try {
@@ -11,11 +14,14 @@ const startServer = async (): Promise<void> => {
 
     logEmailServiceConfigAtStartup();
 
-    // Create Express app
+    // Create Express app + HTTP server so Socket.IO can share the port
     const app = createApp();
+    const httpServer = http.createServer(app);
 
-    // Start server
-    app.listen(config.port, () => {
+    await connectRedis();
+    await attachFieldTrackingSocket(httpServer);
+
+    httpServer.listen(config.port, () => {
       console.info(`🚀 Server running in ${config.nodeEnv} mode on port ${config.port}`);
       console.info(`📍 Health check: http://localhost:${config.port}/api/health`);
       startBirthdayEmailScheduler();

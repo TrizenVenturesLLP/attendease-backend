@@ -20,6 +20,9 @@ router.post('/session/start', fieldTrackingController.startSession);
 // Send periodic location point every 5 minutes
 router.post('/location', fieldTrackingController.recordLocation);
 
+// ExtraHand-style live ping (REST fallback when Socket.IO is down)
+router.post('/live-location', fieldTrackingController.recordLiveLocation);
+
 // Stop tracking session (called on check-out)
 router.post('/session/stop', fieldTrackingController.stopSession);
 

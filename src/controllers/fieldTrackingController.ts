@@ -131,6 +131,56 @@ export class FieldTrackingController {
   }
 
   /**
+   * POST /field-tracking/live-location
+   * ExtraHand-style live ping (Socket.IO REST fallback).
+   * Payload: { sessionId, lat, lng, timestamp, forcePersist? }
+   */
+  async recordLiveLocation(req: Request, res: Response): Promise<void> {
+    try {
+      const userId = req.user!.userId;
+      const { sessionId, lat, lng, timestamp, accuracy, forcePersist } = req.body || {};
+
+      const { processFieldLocationUpdate } = await import(
+        '../services/fieldLocationLiveService'
+      );
+      const result = await processFieldLocationUpdate(userId, req.organizationId!, {
+        sessionId: String(sessionId || ''),
+        lat: typeof lat === 'number' ? lat : parseFloat(lat),
+        lng: typeof lng === 'number' ? lng : parseFloat(lng),
+        timestamp: typeof timestamp === 'number' ? timestamp : Date.now(),
+        accuracy:
+          accuracy !== undefined && accuracy !== null && accuracy !== ''
+            ? parseFloat(accuracy)
+            : undefined,
+        forcePersist: forcePersist === true,
+      });
+
+      if (!result.ok) {
+        const inactive = result.reason === 'inactive-status' || result.reason === 'session-not-found';
+        res.status(inactive ? 409 : 400).json({
+          success: false,
+          error: result.reason,
+          code: inactive ? 'SESSION_NOT_ACTIVE' : undefined,
+          timestamp: new Date().toISOString(),
+        });
+        return;
+      }
+
+      res.status(200).json({
+        success: true,
+        message: 'Live location recorded',
+        timestamp: new Date().toISOString(),
+      });
+    } catch (error: any) {
+      res.status(400).json({
+        success: false,
+        error: error.message || 'Failed to record live location',
+        timestamp: new Date().toISOString(),
+      });
+    }
+  }
+
+  /**
    * POST /field-tracking/session/stop
    * Employee stops tracking session on check-out.
    */

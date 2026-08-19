@@ -36,6 +36,7 @@
   "type": "commonjs",
   "dependencies": {
     "@azure/msal-node": "^3.8.4",
+    "@socket.io/redis-adapter": "^8.3.0",
     "aws-sdk": "^2.1693.0",
     "axios": "^1.13.2",
     "bcrypt": "^6.0.0",
@@ -46,7 +47,9 @@
     "helmet": "^8.1.0",
     "jsonwebtoken": "^9.0.3",
     "mongoose": "^9.0.2",
-    "nodemon": "^3.1.11"
+    "nodemon": "^3.1.11",
+    "redis": "^6.2.1",
+    "socket.io": "^4.8.3"
   },
   "devDependencies": {
     "@types/bcrypt": "^6.0.0",

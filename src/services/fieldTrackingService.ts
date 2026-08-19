@@ -520,6 +520,8 @@ export class FieldTrackingService {
       sessionId?: string;
       attendanceId?: string;
       pointId?: string;
+      /** Live socket pipeline already fanned out this fix. */
+      skipBroadcast?: boolean;
     }
   ): Promise<any> {
     const user = await User.findById(userId).lean();
@@ -612,6 +614,18 @@ export class FieldTrackingService {
             locationDisabledSince: null,
           },
         });
+        if (!options?.skipBroadcast) {
+          const { broadcastRecordedLocation } = await import('./fieldLocationLiveService');
+          broadcastRecordedLocation({
+            organizationId,
+            sessionId: String(session._id),
+            userId,
+            latitude: lastPoint.latitude,
+            longitude: lastPoint.longitude,
+            recordedAt: freshestRecordedAt,
+            accuracy: lastPoint.accuracy,
+          });
+        }
         return { point: lastPoint, sessionId: session._id, duplicate: true };
       }
     }
@@ -645,6 +659,19 @@ export class FieldTrackingService {
       },
       $inc: { pointCount: 1 },
     });
+
+    if (!options?.skipBroadcast) {
+      const { broadcastRecordedLocation } = await import('./fieldLocationLiveService');
+      broadcastRecordedLocation({
+        organizationId,
+        sessionId: String(session._id),
+        userId,
+        latitude: lat,
+        longitude: lng,
+        recordedAt,
+        accuracy,
+      });
+    }
 
     return { point, sessionId: session._id };
     try {
