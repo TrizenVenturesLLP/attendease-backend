@@ -24,7 +24,7 @@ import {
 } from './invitationValidationService';
 import OtpToken from '../models/OtpToken';
 import subscriptionService from './subscriptionService';
-import { BillingCycle } from '../models/Subscription';
+import { BillingCycle, FREE_TRIAL_EMPLOYEE_LIMIT } from '../models/Subscription';
 
 function resolveProfileComplete(user: IUser): boolean {
   if (user.profileComplete === true) {
@@ -901,6 +901,13 @@ class AuthService {
       throw new BadRequestError('Password must be at least 6 characters');
     }
 
+    const normalizedEmployeeCount = Number(employeeCount) || FREE_TRIAL_EMPLOYEE_LIMIT;
+    if (normalizedEmployeeCount > FREE_TRIAL_EMPLOYEE_LIMIT) {
+      throw new BadRequestError(
+        `Free trial supports up to ${FREE_TRIAL_EMPLOYEE_LIMIT} employees. Please choose a paid plan for larger teams.`
+      );
+    }
+
     const normalizedEmail = this.normalizeEmail(email);
 
     // Ensure account doesn't already exist
@@ -949,7 +956,7 @@ class AuthService {
     // 2. Create 30-Day Free Trial Subscription
     const subscription = await subscriptionService.createTrialSubscription(
       organization._id,
-      employeeCount || 50,
+      normalizedEmployeeCount,
       planId,
       (billingCycle as BillingCycle) || BillingCycle.MONTHLY
     );

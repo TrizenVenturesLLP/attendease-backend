@@ -551,7 +551,7 @@ class AuthController {
         phone,
         password,
         organizationName,
-        employeeCount: Number(employeeCount) || 50,
+        employeeCount: Number(employeeCount) || 25,
         planId,
         billingCycle,
       });

@@ -18,6 +18,8 @@ export enum BillingCycle {
   ANNUAL = 'ANNUAL',
 }
 
+export const FREE_TRIAL_EMPLOYEE_LIMIT = 25;
+
 export interface ISubscription extends Document {
   organizationId: mongoose.Types.ObjectId;
   status: SubscriptionStatus;

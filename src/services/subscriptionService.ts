@@ -3,6 +3,7 @@ import Subscription, {
   SubscriptionPlanId,
   SubscriptionStatus,
   BillingCycle,
+  FREE_TRIAL_EMPLOYEE_LIMIT,
 } from '../models/Subscription';
 import Organization from '../models/Organization';
 import User from '../models/User';
@@ -64,7 +65,12 @@ class SubscriptionService {
     requestedPlanId?: string,
     billingCycle: BillingCycle = BillingCycle.MONTHLY
   ): Promise<any> {
-    let planDetails = this.resolvePlanFromEmployeeCount(employeeCount);
+    const normalizedEmployeeCount =
+      typeof employeeCount === 'number' && Number.isFinite(employeeCount)
+        ? Math.max(1, employeeCount)
+        : FREE_TRIAL_EMPLOYEE_LIMIT;
+
+    let planDetails = this.resolvePlanFromEmployeeCount(normalizedEmployeeCount);
 
     // If explicit plan requested (e.g. STARTER/GROWTH/ENTERPRISE), override planDetails if valid
     if (requestedPlanId && Object.values(SubscriptionPlanId).includes(requestedPlanId as SubscriptionPlanId)) {
@@ -153,7 +159,7 @@ class SubscriptionService {
 
     // Fallback if subscription document wasn't created yet
     if (!subRecord) {
-      subRecord = await this.createTrialSubscription(organizationId, 50);
+      subRecord = await this.createTrialSubscription(organizationId, FREE_TRIAL_EMPLOYEE_LIMIT);
     }
 
     const activeSub = subRecord;
@@ -171,6 +177,7 @@ class SubscriptionService {
       subscriptionPlan: activeSub.planId || 'GROWTH',
       planName: activeSub.planId === SubscriptionPlanId.STARTER ? 'Starter' : activeSub.planId === SubscriptionPlanId.GROWTH ? 'Growth' : 'Enterprise',
       employeeLimit: activeSub.employeeLimit || 200,
+      trialEmployeeLimit: FREE_TRIAL_EMPLOYEE_LIMIT,
       pricePerUserPerDay: pricePerDay,
       pricePerUserPerMonth: Number(activeSub.pricePerUserPerMonth) || 60,
       billingCycle: activeSub.billingCycle || 'MONTHLY',

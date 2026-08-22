@@ -11,6 +11,10 @@ import User, { AuthProvider, IUser, UserRole } from '../models/User';
 import Organization from '../models/Organization';
 import Department from '../models/Department';
 import AttendancePolicy, { PolicyStatus } from '../models/AttendancePolicy';
+import Subscription, {
+  SubscriptionStatus,
+  FREE_TRIAL_EMPLOYEE_LIMIT,
+} from '../models/Subscription';
 import {
   BadRequestError,
   NotFoundError,
@@ -62,6 +66,43 @@ export interface UserFilters {
 }
 
 class UserService {
+  private async assertCanAddActiveUser(organizationId: string): Promise<void> {
+    const latestSubscription = await Subscription.findOne({ organizationId })
+      .select('status employeeLimit')
+      .sort({ createdAt: -1 })
+      .lean();
+
+    if (!latestSubscription) {
+      return;
+    }
+
+    const isTrial = latestSubscription.status === SubscriptionStatus.TRIALING;
+    const effectiveLimit = isTrial
+      ? FREE_TRIAL_EMPLOYEE_LIMIT
+      : Number(latestSubscription.employeeLimit || 0);
+
+    if (!effectiveLimit || effectiveLimit < 1) {
+      return;
+    }
+
+    const activeUsers = await User.countDocuments({
+      organizationId: new mongoose.Types.ObjectId(organizationId),
+      isActive: true,
+    });
+
+    if (activeUsers >= effectiveLimit) {
+      if (isTrial) {
+        throw new ForbiddenError(
+          `Free trial allows up to ${FREE_TRIAL_EMPLOYEE_LIMIT} active employees. Upgrade your plan to add more users.`
+        );
+      }
+
+      throw new ForbiddenError(
+        `Your subscription allows up to ${effectiveLimit} active employees. Please upgrade your plan to add more users.`
+      );
+    }
+  }
+
   private async applyDepartmentPolicyDefaults(
     userData: CreateUserData
   ): Promise<CreateUserData> {
@@ -434,6 +475,9 @@ class UserService {
       organizationId: userData.organizationId,
       isActive: false,
     });
+
+    await this.assertCanAddActiveUser(userData.organizationId);
+
     if (existingInactiveUser) {
       return this.reactivateOrgUser(existingInactiveUser, userData, createdByUserId);
     }
@@ -841,6 +885,10 @@ class UserService {
 
     if (user.role === UserRole.SUPER_ADMIN && requesterRole !== UserRole.SUPER_ADMIN) {
       throw new ForbiddenError('Only System Admin can update Super Admin accounts');
+    }
+
+    if (isActive && !user.isActive && user.organizationId) {
+      await this.assertCanAddActiveUser(user.organizationId.toString());
     }
 
     user.isActive = isActive;
