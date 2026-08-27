@@ -10,7 +10,7 @@ export class AppError extends Error {
     // Maintains proper stack trace for where our error was thrown
     Error.captureStackTrace(this, this.constructor);
 
-    Object.setPrototypeOf(this, AppError.prototype);
+    Object.setPrototypeOf(this, new.target.prototype);
   }
 }
 
