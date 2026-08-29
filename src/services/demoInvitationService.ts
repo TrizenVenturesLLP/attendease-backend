@@ -6,6 +6,7 @@ import DemoInvitation, {
 } from '../models/DemoInvitation';
 import Organization from '../models/Organization';
 import User, { UserRole } from '../models/User';
+import Subscription, { SubscriptionStatus } from '../models/Subscription';
 import organizationService from './organizationService';
 import userService from './userService';
 import platformSettingsService from './platformSettingsService';
@@ -793,6 +794,40 @@ class DemoInvitationService {
     invite.acceptedAt = now;
     invite.demoAccessExpiresAt = demoAccessExpiresAt;
     await invite.save();
+
+    // Ensure subscription has trial dates set for dashboard display
+    const organizationId = invite.demoTenantId;
+    let subscription = await Subscription.findOne({
+      organizationId,
+      status: SubscriptionStatus.TRIALING,
+    });
+
+    if (subscription) {
+      if (!subscription.trialStartAt) {
+        subscription.trialStartAt = now;
+      }
+      if (!subscription.trialEndAt) {
+        subscription.trialEndAt = demoAccessExpiresAt;
+      }
+      await subscription.save();
+    } else {
+      // Create subscription if it doesn't exist
+      const defaultLimit = await platformSettingsService.getDemoEmployeeLimit();
+      await Subscription.create({
+        organizationId,
+        status: SubscriptionStatus.TRIALING,
+        planId: 'STARTER',
+        employeeLimit: defaultLimit,
+        pricingVersion: 'v1',
+        billingCycle: 'MONTHLY',
+        pricePerUserPerDay: 1,
+        pricePerUserPerMonth: 30,
+        trialStartAt: now,
+        trialEndAt: demoAccessExpiresAt,
+        currentPeriodStart: now,
+        currentPeriodEnd: demoAccessExpiresAt,
+      });
+    }
 
     const org = await Organization.findById(invite.demoTenantId);
     if (org && !this.isSharedDemoOrg(org)) {

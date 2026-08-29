@@ -26,6 +26,8 @@ interface DashboardStats {
     employeeLimit: number;
     activeEmployees: number;
     isDemoAccount: boolean;
+    trialStartAt?: string;
+    trialEndAt?: string;
   };
 }
 
@@ -40,7 +42,7 @@ class DashboardService {
     const [organization, latestSubscription, activeEmployees] = await Promise.all([
       Organization.findById(organizationId).select('isDemoTenant').lean(),
       Subscription.findOne({ organizationId })
-        .select('status trialEndAt employeeLimit')
+        .select('status trialStartAt trialEndAt employeeLimit')
         .sort({ createdAt: -1 })
         .lean(),
       User.countDocuments({ organizationId, isActive: true }),
@@ -56,13 +58,24 @@ class DashboardService {
 
     const employeeLimit = Number(latestSubscription?.employeeLimit || FREE_TRIAL_EMPLOYEE_LIMIT);
 
+    const trialStartAt = latestSubscription?.trialStartAt
+      ? new Date(latestSubscription.trialStartAt)
+      : undefined;
     const trialEndAt = latestSubscription?.trialEndAt
       ? new Date(latestSubscription.trialEndAt)
       : undefined;
 
     const now = new Date();
     const daysRemaining = trialEndAt
-      ? Math.max(0, Math.ceil((trialEndAt.getTime() - now.getTime()) / (1000 * 60 * 60 * 24)))
+      ? (() => {
+          const today = new Date(now);
+          today.setHours(0, 0, 0, 0);
+
+          const end = new Date(trialEndAt);
+          end.setHours(0, 0, 0, 0);
+
+          return Math.max(0, Math.round((end.getTime() - today.getTime()) / (1000 * 60 * 60 * 24)));
+        })()
       : 0;
 
     return {
@@ -70,6 +83,8 @@ class DashboardService {
       employeeLimit,
       activeEmployees,
       isDemoAccount,
+      trialStartAt: trialStartAt?.toISOString(),
+      trialEndAt: trialEndAt?.toISOString(),
     };
   }
 

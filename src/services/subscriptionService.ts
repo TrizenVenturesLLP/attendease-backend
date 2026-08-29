@@ -8,6 +8,7 @@ import Subscription, {
 import Organization from '../models/Organization';
 import User from '../models/User';
 import { NotFoundError } from '../utils/AppError';
+import platformSettingsService from './platformSettingsService';
 
 export interface PlanDetails {
   planId: SubscriptionPlanId;
@@ -71,6 +72,7 @@ class SubscriptionService {
         : FREE_TRIAL_EMPLOYEE_LIMIT;
 
     let planDetails = this.resolvePlanFromEmployeeCount(normalizedEmployeeCount);
+    const defaultEmployeeLimit = await platformSettingsService.getDemoEmployeeLimit();
 
     // If explicit plan requested (e.g. STARTER/GROWTH/ENTERPRISE), override planDetails if valid
     if (requestedPlanId && Object.values(SubscriptionPlanId).includes(requestedPlanId as SubscriptionPlanId)) {
@@ -113,7 +115,7 @@ class SubscriptionService {
       organizationId,
       status: SubscriptionStatus.TRIALING,
       planId: planDetails.planId,
-      employeeLimit: planDetails.employeeLimit,
+      employeeLimit: defaultEmployeeLimit,
       pricingVersion: 'v1',
       billingCycle,
       pricePerUserPerDay: planDetails.pricePerUserPerDay,

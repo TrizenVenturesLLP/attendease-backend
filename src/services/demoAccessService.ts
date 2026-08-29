@@ -181,21 +181,15 @@ class DemoAccessService {
 
   async updateGlobalLimit(employeeLimit: number, updatedBy: string) {
     const limit = await platformSettingsService.updateDemoEmployeeLimit(employeeLimit, updatedBy);
-    const organizations = await Organization.find({ isDemoTenant: true })
-      .select('_id name subdomain')
-      .lean();
-    const demoOrganizationIds = organizations
-      .filter((organization) => !isSharedDemoOrg(organization))
-      .map((organization) => organization._id);
 
     await Subscription.updateMany(
       {
-        organizationId: { $in: demoOrganizationIds },
         status: SubscriptionStatus.TRIALING,
         demoLimitOverride: { $ne: true },
       },
       { $set: { employeeLimit: limit } }
     );
+
     return { employeeLimit: limit };
   }
 
