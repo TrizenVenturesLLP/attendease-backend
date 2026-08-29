@@ -4,6 +4,7 @@ import { UserRole } from '../models/User';
 import platformSettingsController from '../controllers/platformSettingsController';
 import demoInvitationController from '../controllers/demoInvitationController';
 import demoRequestController from '../controllers/demoRequestController';
+import demoAccessController from '../controllers/demoAccessController';
 
 const router = Router();
 
@@ -25,6 +26,15 @@ router.post('/demo-invites/:id/revoke', demoInvitationController.revoke.bind(dem
 router.post('/demo-invites/:id/suspend', demoInvitationController.suspend.bind(demoInvitationController));
 router.post('/demo-invites/:id/restore', demoInvitationController.restore.bind(demoInvitationController));
 router.post('/demo-invites/:id/resend', demoInvitationController.resend.bind(demoInvitationController));
+
+router.get('/demo-access', demoAccessController.list.bind(demoAccessController));
+router.get('/demo-access/settings', demoAccessController.getGlobalLimit.bind(demoAccessController));
+router.patch('/demo-access/settings', demoAccessController.updateGlobalLimit.bind(demoAccessController));
+router.patch(
+  '/demo-access/:organizationId/limit',
+  demoAccessController.updateLimit.bind(demoAccessController)
+);
+router.delete('/demo-access/:id', demoAccessController.remove.bind(demoAccessController));
 
 // Restricted to demo@trizenventures.com
 const demoRequestAuth = authorizeEmail('demo@trizenventures.com');

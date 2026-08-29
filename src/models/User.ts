@@ -68,6 +68,8 @@ export interface IUser extends Document {
   phone?: string;
   /** False for new invitees until they finish the post-invite profile step. */
   profileComplete?: boolean;
+  /** Last successful authentication time, used to show whether demo access was opened. */
+  lastLoginAt?: Date;
   createdAt: Date;
   updatedAt: Date;
   fullName: string;
@@ -239,6 +241,9 @@ const UserSchema = new Schema<IUser>(
     },
     profileComplete: {
       type: Boolean,
+    },
+    lastLoginAt: {
+      type: Date,
     },
   },
   {

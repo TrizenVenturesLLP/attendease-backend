@@ -25,6 +25,7 @@ export interface ISubscription extends Document {
   status: SubscriptionStatus;
   planId: SubscriptionPlanId;
   employeeLimit: number;
+  demoLimitOverride?: boolean;
   pricingVersion: string;
   billingCycle: BillingCycle;
   pricePerUserPerDay: number;
@@ -61,6 +62,10 @@ const SubscriptionSchema = new Schema<ISubscription>(
       type: Number,
       required: true,
       default: 200,
+    },
+    demoLimitOverride: {
+      type: Boolean,
+      default: false,
     },
     pricingVersion: {
       type: String,

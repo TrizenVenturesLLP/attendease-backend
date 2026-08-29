@@ -23,6 +23,7 @@ import {
   markInvitationAccepted,
 } from './invitationValidationService';
 import OtpToken from '../models/OtpToken';
+import DemoAccessRequest from '../models/DemoAccessRequest';
 import subscriptionService from './subscriptionService';
 import { BillingCycle, FREE_TRIAL_EMPLOYEE_LIMIT } from '../models/Subscription';
 
@@ -187,6 +188,9 @@ class AuthService {
         }
       }
     }
+
+    user.lastLoginAt = new Date();
+    await user.save();
 
     const token = this.generateToken(user);
     return await this.createLoginResult(token, user);
@@ -598,10 +602,20 @@ class AuthService {
   async getCurrentUser(userId: string): Promise<ClientUser> {
     const user = await User.findById(userId)
       .populate('supervisorId', 'firstName lastName email')
-      .lean();
+      .exec();
 
     if (!user) {
       throw new NotFoundError('User not found');
+    }
+
+    if (user.organizationId) {
+      const organization = await Organization.findById(user.organizationId)
+        .select('isDemoTenant')
+        .lean();
+      if (organization?.isDemoTenant) {
+        user.lastLoginAt = new Date();
+        await user.save();
+      }
     }
 
     return this.formatClientUser(user as unknown as IUser);
@@ -840,6 +854,11 @@ class AuthService {
       expiresAt,
       verified: false,
     });
+    await DemoAccessRequest.findOneAndUpdate(
+      { email: normalizedEmail },
+      { $set: { lastOtpSentAt: new Date() }, $setOnInsert: { email: normalizedEmail, requestedAt: new Date() } },
+      { upsert: true, setDefaultsOnInsert: true }
+    );
 
     // Send OTP to user's email via the email service
     await emailNotificationService.sendOtpEmail(normalizedEmail, otp);
@@ -902,11 +921,6 @@ class AuthService {
     }
 
     const normalizedEmployeeCount = Number(employeeCount) || FREE_TRIAL_EMPLOYEE_LIMIT;
-    if (normalizedEmployeeCount > FREE_TRIAL_EMPLOYEE_LIMIT) {
-      throw new BadRequestError(
-        `Free trial supports up to ${FREE_TRIAL_EMPLOYEE_LIMIT} employees. Please choose a paid plan for larger teams.`
-      );
-    }
 
     const normalizedEmail = this.normalizeEmail(email);
 
@@ -951,6 +965,11 @@ class AuthService {
       orgCode,
       subdomain,
       isActive: true,
+      isDemoTenant: true,
+      demoAccessType: 'otp_trial',
+      prospectLabel: organizationName.trim(),
+      demoAccessRequestedAt: new Date(),
+      demoEmployeeCountRequested: normalizedEmployeeCount,
     });
 
     // 2. Create 30-Day Free Trial Subscription
@@ -973,9 +992,21 @@ class AuthService {
       isActive: true,
       profileComplete: true,
     });
+    user.lastLoginAt = new Date();
+    await user.save();
 
     organization.createdBy = user._id;
     await organization.save();
+    await DemoAccessRequest.findOneAndUpdate(
+      { email: normalizedEmail },
+      {
+        $set: {
+          verifiedAt: new Date(),
+          organizationId: organization._id,
+          userId: user._id,
+        },
+      }
+    );
 
     // 4. Generate token for immediate access
     const token = this.generateToken(user);

@@ -8,6 +8,7 @@ export interface DemoInvitationDefaults {
 export interface IPlatformSettings extends Document {
   key: 'default';
   demoInvitations: DemoInvitationDefaults;
+  demoEmployeeLimit: number;
   updatedBy?: mongoose.Types.ObjectId;
   createdAt: Date;
   updatedAt: Date;
@@ -25,6 +26,7 @@ const PlatformSettingsSchema = new Schema<IPlatformSettings>(
   {
     key: { type: String, required: true, unique: true, default: 'default', enum: ['default'] },
     demoInvitations: { type: DemoInvitationDefaultsSchema, required: true },
+    demoEmployeeLimit: { type: Number, required: true, min: 1, max: 99999, default: 50 },
     updatedBy: { type: Schema.Types.ObjectId, ref: 'User' },
   },
   { timestamps: true }

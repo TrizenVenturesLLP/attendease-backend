@@ -86,6 +86,12 @@ router.patch(
   userController.updateUserStatus
 );
 
+router.post(
+  '/:id/reset-password',
+  authorize(UserRole.SUPER_ADMIN, UserRole.ADMIN),
+  userController.resetUserPassword
+);
+
 /**
  * @route   GET /api/users/:id
  * @desc    Get user by ID

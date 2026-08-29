@@ -1,6 +1,9 @@
 import config from '../config';
 import PlatformSettings from '../models/PlatformSettings';
 import { DemoInvitationDefaults } from '../models/PlatformSettings';
+import { BadRequestError } from '../utils/AppError';
+
+export const MAX_DEMO_EMPLOYEE_LIMIT = 99999;
 
 const ENV_DEFAULTS: DemoInvitationDefaults = {
   inviteLinkTtlHours: config.demoInvitations.inviteLinkTtlHours,
@@ -44,6 +47,23 @@ class PlatformSettingsService {
     );
 
     return next;
+  }
+
+  async getDemoEmployeeLimit(): Promise<number> {
+    const doc = await PlatformSettings.findOne({ key: 'default' }).lean();
+    return doc?.demoEmployeeLimit ?? 50;
+  }
+
+  async updateDemoEmployeeLimit(employeeLimit: number, updatedBy: string): Promise<number> {
+    if (!Number.isInteger(employeeLimit) || employeeLimit < 1 || employeeLimit > MAX_DEMO_EMPLOYEE_LIMIT) {
+      throw new BadRequestError(`Demo user limit must be an integer between 1 and ${MAX_DEMO_EMPLOYEE_LIMIT}`);
+    }
+    await PlatformSettings.findOneAndUpdate(
+      { key: 'default' },
+      { $set: { demoEmployeeLimit: employeeLimit, updatedBy } },
+      { upsert: true, new: true, setDefaultsOnInsert: true }
+    );
+    return employeeLimit;
   }
 }
 

@@ -12,8 +12,6 @@ import Organization from '../models/Organization';
 import Department from '../models/Department';
 import AttendancePolicy, { PolicyStatus } from '../models/AttendancePolicy';
 import Subscription, {
-  SubscriptionStatus,
-  FREE_TRIAL_EMPLOYEE_LIMIT,
 } from '../models/Subscription';
 import {
   BadRequestError,
@@ -76,10 +74,7 @@ class UserService {
       return;
     }
 
-    const isTrial = latestSubscription.status === SubscriptionStatus.TRIALING;
-    const effectiveLimit = isTrial
-      ? FREE_TRIAL_EMPLOYEE_LIMIT
-      : Number(latestSubscription.employeeLimit || 0);
+    const effectiveLimit = Number(latestSubscription.employeeLimit || 0);
 
     if (!effectiveLimit || effectiveLimit < 1) {
       return;
@@ -91,12 +86,6 @@ class UserService {
     });
 
     if (activeUsers >= effectiveLimit) {
-      if (isTrial) {
-        throw new ForbiddenError(
-          `Free trial allows up to ${FREE_TRIAL_EMPLOYEE_LIMIT} active employees. Upgrade your plan to add more users.`
-        );
-      }
-
       throw new ForbiddenError(
         `Your subscription allows up to ${effectiveLimit} active employees. Please upgrade your plan to add more users.`
       );
@@ -709,6 +698,51 @@ class UserService {
     }
 
     return user;
+  }
+
+  /** Reset another user's local password from user management. */
+  async resetUserPassword(
+    userId: string,
+    newPassword: string,
+    requesterRole: UserRole,
+    requesterId: string,
+    organizationId?: string
+  ): Promise<void> {
+    if (!newPassword || newPassword.length < 6) {
+      throw new BadRequestError('Password must be at least 6 characters');
+    }
+
+    if (userId === requesterId) {
+      throw new BadRequestError('Use your profile to change your own password');
+    }
+
+    if (!mongoose.Types.ObjectId.isValid(userId)) {
+      throw new BadRequestError('Invalid user ID');
+    }
+
+    const query: any = { _id: new mongoose.Types.ObjectId(userId) };
+    if (requesterRole !== UserRole.SUPER_ADMIN) {
+      if (!organizationId) {
+        throw new ForbiddenError('Organization context is required');
+      }
+      query.organizationId = new mongoose.Types.ObjectId(organizationId);
+    }
+
+    const user = await User.findOne(query).select('+password');
+    if (!user) {
+      throw new NotFoundError('User not found');
+    }
+
+    if (user.role === UserRole.SUPER_ADMIN) {
+      throw new ForbiddenError('Cannot reset a system admin password here');
+    }
+
+    if (user.authProvider === AuthProvider.MICROSOFT && !user.password) {
+      throw new BadRequestError('Microsoft users must change their password through Microsoft');
+    }
+
+    user.password = newPassword;
+    await user.save();
   }
 
   /**

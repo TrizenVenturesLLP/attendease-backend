@@ -59,6 +59,12 @@ export interface IOrganization extends Document {
   demoExpiresAt?: Date;
   /** Display label for the prospect company (e.g. "Company A"). */
   prospectLabel?: string;
+  /** Identifies accounts created through the OTP demo/trial flow. */
+  demoAccessType?: 'otp_trial' | 'invitation';
+  /** When the account completed OTP verification and entered onboarding. */
+  demoAccessRequestedAt?: Date;
+  /** Employee count entered during OTP onboarding; admins may override the active limit. */
+  demoEmployeeCountRequested?: number;
   settings: OrganizationSettings;
   microsoftAuth: MicrosoftAuthConfig;
   createdBy?: mongoose.Types.ObjectId;
@@ -213,6 +219,18 @@ const OrganizationSchema = new Schema<IOrganization>(
     prospectLabel: {
       type: String,
       trim: true,
+    },
+    demoAccessType: {
+      type: String,
+      enum: ['otp_trial', 'invitation'],
+      index: true,
+    },
+    demoAccessRequestedAt: {
+      type: Date,
+    },
+    demoEmployeeCountRequested: {
+      type: Number,
+      min: 1,
     },
     settings: {
       type: OrganizationSettingsSchema,

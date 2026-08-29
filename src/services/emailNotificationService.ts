@@ -490,7 +490,7 @@ class EmailNotificationService {
       logger.info('[EmailNotificationService] OTP email sent', { to: email });
     } catch (error) {
       logger.error('[EmailNotificationService] OTP email failed', formatAxiosError(error));
-      // Don't throw — log only, so the OTP is still stored and the user can retry
+      throw error;
     }
   }
 }

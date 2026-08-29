@@ -1,5 +1,10 @@
-import { UserRole } from '../models/User';
+import User, { UserRole } from '../models/User';
 import Department from '../models/Department';
+import Organization from '../models/Organization';
+import Subscription, {
+  FREE_TRIAL_EMPLOYEE_LIMIT,
+  SubscriptionStatus,
+} from '../models/Subscription';
 import { attendanceService } from './attendanceService';
 import userService from './userService';
 import { leaveService } from './leaveService';
@@ -16,9 +21,58 @@ interface DashboardStats {
     total: number;
   };
   pendingLeaveApprovals: number;
+  trialSummary?: {
+    daysRemaining: number;
+    employeeLimit: number;
+    activeEmployees: number;
+    isDemoAccount: boolean;
+  };
 }
 
 class DashboardService {
+  private async getTrialSummary(
+    organizationId: string | undefined
+  ): Promise<DashboardStats['trialSummary']> {
+    if (!organizationId) {
+      return undefined;
+    }
+
+    const [organization, latestSubscription, activeEmployees] = await Promise.all([
+      Organization.findById(organizationId).select('isDemoTenant').lean(),
+      Subscription.findOne({ organizationId })
+        .select('status trialEndAt employeeLimit')
+        .sort({ createdAt: -1 })
+        .lean(),
+      User.countDocuments({ organizationId, isActive: true }),
+    ]);
+
+    const isDemoAccount = Boolean(organization?.isDemoTenant);
+    const isTrial = latestSubscription?.status === SubscriptionStatus.TRIALING;
+
+    // Show this block only for free-trial/demo accounts.
+    if (!isDemoAccount && !isTrial) {
+      return undefined;
+    }
+
+    const employeeLimit = Number(latestSubscription?.employeeLimit || FREE_TRIAL_EMPLOYEE_LIMIT);
+
+    const trialEndAt = latestSubscription?.trialEndAt
+      ? new Date(latestSubscription.trialEndAt)
+      : undefined;
+
+    const now = new Date();
+    const daysRemaining = trialEndAt
+      ? Math.max(0, Math.ceil((trialEndAt.getTime() - now.getTime()) / (1000 * 60 * 60 * 24)))
+      : 0;
+
+    return {
+      daysRemaining,
+      employeeLimit,
+      activeEmployees,
+      isDemoAccount,
+    };
+  }
+
   /**
    * Get dashboard statistics based on user role
    */
@@ -86,11 +140,14 @@ class DashboardService {
       }
     }
 
+    const trialSummary = await this.getTrialSummary(organizationId);
+
     return {
       totalUsers,
       totalDepartments,
       todayAttendance,
       pendingLeaveApprovals,
+      trialSummary,
     };
   }
 
@@ -124,10 +181,13 @@ class DashboardService {
       }
     }
 
+    const trialSummary = await this.getTrialSummary(organizationId);
+
     return {
       teamSize,
       todayAttendance,
       pendingLeaveApprovals,
+      trialSummary,
     };
   }
 

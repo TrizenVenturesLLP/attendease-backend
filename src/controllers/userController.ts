@@ -315,6 +315,38 @@ class UserController {
   }
 
   /**
+   * @route   POST /api/users/:id/reset-password
+   * @desc    Reset another user's local password
+   * @access  Private (Super Admin/Admin)
+   */
+  async resetUserPassword(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      if (!req.user) {
+        throw new BadRequestError('User not authenticated');
+      }
+
+      const { password } = req.body;
+      await userService.resetUserPassword(
+        req.params.id,
+        password,
+        req.user.role as UserRole,
+        req.user.userId,
+        req.organizationId
+      );
+
+      const response: ApiResponse = {
+        success: true,
+        message: 'User password reset successfully',
+        timestamp: new Date().toISOString(),
+      };
+
+      res.status(200).json(response);
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  /**
    * @route   GET /api/users/next-employee-id
    * @desc    Suggest next employee ID for an organization
    * @access  Private (Super Admin/Admin/HR)
