@@ -94,6 +94,23 @@ async function uploadCheckInPhotoWithRetry(
   throw lastError;
 }
 
+/**
+ * Normalize a photo field read via `.lean()` into a real Buffer.
+ * MongoDB driver returns Buffer-typed schema fields as BSON `Binary` on lean
+ * queries (not a Node Buffer), so `Buffer.isBuffer()` is false and its
+ * `.length` is a method, not a number — silently breaking truthiness/size
+ * checks. `Binary#value()` returns the underlying Buffer correctly.
+ */
+function toPhotoBuffer(raw: unknown): Buffer | undefined {
+  if (!raw) return undefined;
+  if (Buffer.isBuffer(raw)) return raw;
+  if (raw instanceof Uint8Array) return Buffer.from(raw);
+  const binary = raw as { value?: () => Buffer; buffer?: Uint8Array };
+  if (typeof binary.value === 'function') return binary.value();
+  if (binary.buffer) return Buffer.from(binary.buffer);
+  return undefined;
+}
+
 function resolveCheckInPhotoKey(photoRef?: string): string | undefined {
   const trimmed = photoRef?.trim();
   if (!trimmed) return undefined;
@@ -937,10 +954,7 @@ export class AttendanceService {
     );
     const hasDbPhoto =
       Boolean(attendance.checkInPhotoStored) &&
-      attendance.checkInPhotoData &&
-      (Buffer.isBuffer(attendance.checkInPhotoData)
-        ? attendance.checkInPhotoData.length > 0
-        : (attendance.checkInPhotoData as { length?: number }).length! > 0);
+      (toPhotoBuffer(attendance.checkInPhotoData)?.length ?? 0) > 0;
 
     if (!objectKey && !hasDbPhoto) {
       throw new NotFoundError('No check-in photo for this attendance record');
@@ -963,10 +977,8 @@ export class AttendanceService {
     }
 
     if (hasDbPhoto && !objectKey) {
-      const raw = attendance.checkInPhotoData!;
-      const buffer = Buffer.isBuffer(raw) ? raw : Buffer.from(raw as Uint8Array);
       return {
-        buffer,
+        buffer: toPhotoBuffer(attendance.checkInPhotoData)!,
         contentType: attendance.checkInPhotoContentType || 'image/jpeg',
       };
     }
@@ -988,11 +1000,9 @@ export class AttendanceService {
         const contentType = response.headers.get('content-type') || 'image/jpeg';
         return { buffer: Buffer.from(arrayBuffer), contentType };
       } catch {
-        if (hasDbPhoto && attendance.checkInPhotoData) {
-          const raw = attendance.checkInPhotoData;
-          const buffer = Buffer.isBuffer(raw) ? raw : Buffer.from(raw as Uint8Array);
+        if (hasDbPhoto) {
           return {
-            buffer,
+            buffer: toPhotoBuffer(attendance.checkInPhotoData)!,
             contentType: attendance.checkInPhotoContentType || 'image/jpeg',
           };
         }
@@ -1030,10 +1040,7 @@ export class AttendanceService {
     );
     const hasDbPhoto =
       Boolean(attendance.checkOutPhotoStored) &&
-      attendance.checkOutPhotoData &&
-      (Buffer.isBuffer(attendance.checkOutPhotoData)
-        ? attendance.checkOutPhotoData.length > 0
-        : (attendance.checkOutPhotoData as { length?: number }).length! > 0);
+      (toPhotoBuffer(attendance.checkOutPhotoData)?.length ?? 0) > 0;
 
     if (!objectKey && !hasDbPhoto) {
       throw new NotFoundError('No check-out photo for this attendance record');
@@ -1056,10 +1063,8 @@ export class AttendanceService {
     }
 
     if (hasDbPhoto && !objectKey) {
-      const raw = attendance.checkOutPhotoData!;
-      const buffer = Buffer.isBuffer(raw) ? raw : Buffer.from(raw as Uint8Array);
       return {
-        buffer,
+        buffer: toPhotoBuffer(attendance.checkOutPhotoData)!,
         contentType: attendance.checkOutPhotoContentType || 'image/jpeg',
       };
     }
@@ -1081,11 +1086,9 @@ export class AttendanceService {
         const contentType = response.headers.get('content-type') || 'image/jpeg';
         return { buffer: Buffer.from(arrayBuffer), contentType };
       } catch {
-        if (hasDbPhoto && attendance.checkOutPhotoData) {
-          const raw = attendance.checkOutPhotoData;
-          const buffer = Buffer.isBuffer(raw) ? raw : Buffer.from(raw as Uint8Array);
+        if (hasDbPhoto) {
           return {
-            buffer,
+            buffer: toPhotoBuffer(attendance.checkOutPhotoData)!,
             contentType: attendance.checkOutPhotoContentType || 'image/jpeg',
           };
         }

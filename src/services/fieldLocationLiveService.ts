@@ -1,4 +1,5 @@
 import FieldTrackingSession, { FieldTrackingStatus } from '../models/FieldTrackingSession';
+import User from '../models/User';
 import { fieldTrackingService } from './fieldTrackingService';
 import { emitFieldTrackingLocation } from '../socket/fieldTrackingEmitter';
 
@@ -30,7 +31,7 @@ export type FieldLocationProcessResult =
 
 const LOCATION_DB_WRITE_INTERVAL_MS = 60 * 1000;
 const LOCATION_DB_WRITE_DISTANCE_METERS = 150;
-const LOCATION_MAX_AGE_MS = 2 * 60 * 1000;
+const LOCATION_MAX_AGE_MS = 15 * 60 * 1000;
 const LOCATION_MAX_FUTURE_MS = 30 * 1000;
 
 type LastPersistedLocation = {
@@ -179,8 +180,13 @@ export async function processFieldLocationUpdate(
   const movedEnough = previous
     ? distanceMeters(previous, { lat, lng }) >= LOCATION_DB_WRITE_DISTANCE_METERS
     : true;
+  const userRecord = await User.findById(userId).select('fieldTrackingIntervalMinutes').lean();
+  const intervalMs = userRecord?.fieldTrackingIntervalMinutes
+    ? userRecord.fieldTrackingIntervalMinutes * 60 * 1000
+    : LOCATION_DB_WRITE_INTERVAL_MS;
+
   const waitedEnough = previous
-    ? Date.now() - previous.persistedAt >= LOCATION_DB_WRITE_INTERVAL_MS
+    ? Date.now() - previous.persistedAt >= intervalMs
     : true;
 
   if (!forcePersist && !movedEnough && !waitedEnough) {

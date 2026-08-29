@@ -210,8 +210,10 @@ AttendanceSchema.index({ organizationId: 1, locationStatus: 1, date: 1 });
 
 AttendanceSchema.pre('save', async function () {
   if (this.checkIn && this.checkOut) {
-    const diffMs = this.checkOut.getTime() - this.checkIn.getTime();
-    this.workingHours = Math.round((diffMs / (1000 * 60 * 60)) * 100) / 100;
+    const checkInTime = new Date(this.checkIn).getTime();
+    const checkOutTime = new Date(this.checkOut).getTime();
+    const diffMs = checkOutTime - checkInTime;
+    this.workingHours = Math.round((Math.max(0, diffMs) / (1000 * 60 * 60)) * 100) / 100;
   }
 });
 

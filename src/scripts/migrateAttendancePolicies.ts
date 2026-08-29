@@ -52,13 +52,11 @@ async function migrate(): Promise<void> {
         defaultAttendancePolicyId: { $exists: true },
         departmentAttendancePolicyId: { $exists: false },
       },
-      [
-        {
-          $set: {
-            departmentAttendancePolicyId: '$defaultAttendancePolicyId',
-          },
+      {
+        $rename: {
+          defaultAttendancePolicyId: 'departmentAttendancePolicyId',
         },
-      ]
+      }
     );
     if (deptRename.modifiedCount > 0) {
       console.log(`  Renamed department policy field on ${deptRename.modifiedCount} department(s)`);
