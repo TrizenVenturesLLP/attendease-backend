@@ -100,7 +100,7 @@ export class NotificationService {
         Organization.find({ isActive: true, createdAt: { $gte: since } })
           .sort({ createdAt: -1 })
           .limit(12)
-          .select('name createdAt')
+          .select('name subdomain createdAt')
           .lean(),
         // Paused orgs only — exclude soft-deleted rows (deletedAt is a date)
         Organization.find({
@@ -125,7 +125,7 @@ export class NotificationService {
           id,
           type: 'org_new',
           title: 'New organization',
-          body: `${o.name} was created recently.`,
+          body: `${o.name} was created. Add this subdomain: ${o.subdomain || 'not set'}.`,
           href: '/dashboard/organizations',
           createdAt: toIso(o.createdAt as Date),
         });

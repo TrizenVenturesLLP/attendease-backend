@@ -8,6 +8,7 @@ import { logger } from '../utils/logger';
 interface OrganizationCreatedEmailInput {
   organizationId: string;
   organizationName: string;
+  subdomain?: string;
   companyAdminEmail: string;
   companyAdminName?: string;
   createdByUserId?: string;
@@ -210,6 +211,7 @@ class EmailNotificationService {
         endpoint,
         {
           organizationName: input.organizationName,
+          subdomain: input.subdomain,
           companyAdminEmail: input.companyAdminEmail,
           companyAdminName: input.companyAdminName,
           companyAdminInviteLink: inviteLink,

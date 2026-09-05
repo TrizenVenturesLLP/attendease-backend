@@ -17,6 +17,7 @@
     "sync:dept-ids": "ts-node src/scripts/syncDeptAndRegenIds.ts",
     "reset:test-users": "ts-node src/scripts/resetTestUsers.ts",
     "send:birthday-emails": "ts-node src/scripts/sendBirthdayNotifications.ts",
+    "fix:password-hash": "node scripts/fix-password-hash.js",
     "lint": "eslint src --ext .ts",
     "lint:fix": "eslint src --ext .ts --fix",
     "format": "prettier --write \"src/**/*.ts\"",

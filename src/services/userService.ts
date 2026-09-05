@@ -33,6 +33,8 @@ export interface CreateUserData {
   lastName: string;
   role: UserRole;
   department?: string;
+  designation?: string;
+  employmentStatus?: string;
   supervisorId?: string;
   employeeId?: string;
   attendancePolicyId?: string;
@@ -45,6 +47,8 @@ export interface UpdateUserData {
   firstName?: string;
   lastName?: string;
   department?: string;
+  designation?: string;
+  employmentStatus?: string;
   supervisorId?: string;
   employeeId?: string;
   attendancePolicyId?: string;
@@ -157,6 +161,8 @@ class UserService {
     existing.lastName = userData.lastName;
     existing.role = userData.role;
     existing.department = userData.department;
+    existing.designation = userData.designation;
+    existing.employmentStatus = userData.employmentStatus;
     existing.supervisorId = userData.supervisorId
       ? new mongoose.Types.ObjectId(userData.supervisorId)
       : undefined;
@@ -542,15 +548,20 @@ class UserService {
   ): Promise<IUser[]> {
     const query: any = {};
 
+    const effectiveOrgId = filters?.organizationId || organizationId;
+
     // Enforce organization isolation for all roles except Super Admin
     if (requesterRole !== UserRole.SUPER_ADMIN) {
       if (!organizationId) {
         throw new ForbiddenError('Organization identification is required');
       }
       query.organizationId = new mongoose.Types.ObjectId(organizationId);
-    } else if (filters?.organizationId) {
+    } else if (effectiveOrgId) {
       // Super Admin can optionally filter by organization
-      query.organizationId = new mongoose.Types.ObjectId(filters.organizationId);
+      if (!mongoose.Types.ObjectId.isValid(effectiveOrgId)) {
+        throw new BadRequestError('Invalid organization ID');
+      }
+      query.organizationId = new mongoose.Types.ObjectId(effectiveOrgId);
     }
 
     // SUPERVISORS (Managers) visibility rules

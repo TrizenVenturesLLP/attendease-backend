@@ -139,6 +139,9 @@ class UserController {
         department: req.query.department as string | undefined,
         isActive: req.query.isActive === 'true' ? true : req.query.isActive === 'false' ? false : undefined,
         search: req.query.search as string | undefined,
+        organizationId:
+          (req.query.organizationId as string | undefined) ||
+          (req.organizationId as string | undefined),
       };
 
       // Pass organizationId, requester role, and requester ID for permission filtering

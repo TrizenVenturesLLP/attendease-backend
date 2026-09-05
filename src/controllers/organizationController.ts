@@ -71,6 +71,7 @@ class OrganizationController {
           await emailNotificationService.sendOrganizationCreatedFlow({
             organizationId: organization._id.toString(),
             organizationName: organization.name,
+            subdomain: organization.subdomain,
             companyAdminEmail: normalizedEmail,
             companyAdminName,
             createdByUserId: req.user.userId,

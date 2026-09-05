@@ -1,5 +1,6 @@
 import mongoose, { Document, Schema } from 'mongoose';
 import bcrypt from 'bcrypt';
+import { logger } from '../utils/logger';
 
 export enum UserRole {
   SUPER_ADMIN = 'super_admin',
@@ -39,10 +40,12 @@ export interface IUser extends Document {
   lastName: string;
   role: UserRole;
   department?: string;
+  designation?: string;
   teamId?: mongoose.Types.ObjectId;
   supervisorId?: mongoose.Types.ObjectId;
   employeeId?: string;
   isActive: boolean;
+  employmentStatus?: string;
   createdBy?: mongoose.Types.ObjectId;
   /** System Admin (and reserved for future roles) — platform UI preferences */
   platformPreferences?: PlatformPreferences;
@@ -144,6 +147,10 @@ const UserSchema = new Schema<IUser>(
       type: String,
       trim: true,
     },
+    designation: {
+      type: String,
+      trim: true,
+    },
     teamId: {
       type: Schema.Types.ObjectId,
       ref: 'Team',
@@ -160,6 +167,10 @@ const UserSchema = new Schema<IUser>(
     isActive: {
       type: Boolean,
       default: true,
+    },
+    employmentStatus: {
+      type: String,
+      trim: true,
     },
     createdBy: {
       type: Schema.Types.ObjectId,
@@ -271,8 +282,21 @@ UserSchema.pre('save', async function () {
     return;
   }
 
-  const salt = await bcrypt.genSalt(10);
-  this.password = await bcrypt.hash(this.password, salt);
+  try {
+    // Check if password is already hashed (starts with bcrypt hash prefix)
+    if (this.password.startsWith('$2a$') || this.password.startsWith('$2b$') || this.password.startsWith('$2y$')) {
+      logger.info(`Password already hashed for user ${this.email}`);
+      return;
+    }
+
+    const salt = await bcrypt.genSalt(10);
+    this.password = await bcrypt.hash(this.password, salt);
+    logger.info(`Password hashed successfully for user ${this.email}`);
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    logger.error(`Error hashing password for user ${this.email}: ${errorMessage}`);
+    throw error;
+  }
 });
 
 // Method to compare passwords
@@ -281,10 +305,22 @@ UserSchema.methods.comparePassword = async function (
 ): Promise<boolean> {
   try {
     if (!this.password) {
+      logger.warn(`No password stored for user ${this.email}`);
       return false;
     }
+
+    // Check if stored password is NOT a valid bcrypt hash
+    if (!this.password.startsWith('$2a$') && !this.password.startsWith('$2b$') && !this.password.startsWith('$2y$')) {
+      const firstChars = this.password.substring(0, 20);
+      logger.error(`CRITICAL: Password for user ${this.email} is NOT a valid bcrypt hash! Stored password starts with: ${firstChars}`);
+      // Try to compare anyway (will fail) to maintain backward compatibility
+      return await bcrypt.compare(candidatePassword, this.password);
+    }
+
     return await bcrypt.compare(candidatePassword, this.password);
   } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    logger.error(`Error comparing password for user ${this.email}: ${errorMessage}`);
     return false;
   }
 };
